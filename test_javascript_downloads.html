@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test JavaScript Download Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-case {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            background: #fafafa;
+        }
+        .test-case h3 {
+            margin: 0 0 10px 0;
+            color: #2e7d32;
+        }
+        .html-structure {
+            background: #f5f5f5;
+            border-left: 4px solid #2196F3;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .expected-result {
+            background: #e8f5e8;
+            border-left: 4px solid #4CAF50;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .smsc_cm_body_row {
+            border: 1px solid #ddd;
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+        }
+        .name {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .smsc_cm_link {
+            color: #1976d2;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .smsc_cm_body_row_block_inline {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+            margin: 10px 0;
+            font-style: italic;
+        }
+        .smsc_cm_body_row_block_mime {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+        .test-button {
+            background: #2196F3;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 5px 10px 0;
+        }
+        .test-button:hover {
+            background: #1976d2;
+        }
+        .result {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📥 SmartSchool HTML Download Detection Test</h1>
+        <p>Testing JavaScript-triggered download detection for HTML files</p>
+    </div>
+
+    <div class="test-container">
+        <h2>🔧 Test Overview</h2>
+        <p>This test verifies that the Chrome extension can properly detect and extract download URLs from JavaScript-triggered links, specifically for HTML files that use <code>onclick</code> attributes instead of direct <code>href</code> download links.</p>
+        
+        <div class="test-case">
+            <h3>Issue Being Fixed:</h3>
+            <p>HTML files with JavaScript downloads (like in example2.html) were not being detected because the extension only looked for <code>href</code> attributes containing "/Documents/Download/", but these files use <code>onclick</code> with <code>window.open()</code> calls.</p>
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>🧪 Test Case: HTML File with JavaScript Download</h2>
+        <p>This simulates the structure found in example2.html:</p>
+        
+        <!-- Simulate the SmartSchool HTML file structure -->
+        <div id="docID_411262" class="smsc_cm_body_row">
+            <div class="name">
+                <a href="https://spc.smartschool.be/Documents/Index/Index/courseID/510/parentID/411260/ssID/65#" 
+                   onclick="window.open('/Documents/Download/Index/htm/1/courseID/510/docID/411262/ssID/65','Document', 'width=500, height=500, left=30, top=30, menubar=no, status=no, location=no, toolbar=no, scrollbars=yes, resizable=yes');" 
+                   title="applet" 
+                   class="smsc_cm_link">applet</a>
+            </div>
+            
+            <div class="smsc_cm_body_row_block_inline">
+                <p><a href="https://www.st-andrews.ac.uk/physics/quvis/simulations_html5/sims/MeasurementUncertainty/measurement-outcome-uncertainty.html" 
+                      target="_blank" 
+                      rel="noopener">https://www.st-andrews.ac.uk/physics/quvis/simulations_html5/sims/MeasurementUncertainty/measurement-outcome-uncertainty.html</a></p>
+                <p>&nbsp;</p>
+            </div>
+            
+            <div class="smsc_cm_body_row_block_mime">HTML-bestand - 609 KiB - 2025-05-16 09:27</div>
+        </div>
+
+        <div class="expected-result">
+            <h4>✅ Expected Result:</h4>
+            <ul>
+                <li><strong>File Detection:</strong> Extension should detect this as an HTML file</li>
+                <li><strong>Download URL:</strong> Should extract <code>/Documents/Download/Index/htm/1/courseID/510/docID/411262/ssID/65</code> from onclick</li>
+                <li><strong>Filename:</strong> Should use "applet.html" as the filename</li>
+                <li><strong>External Link Filtering:</strong> Should ignore the external st-andrews.ac.uk link in preview content</li>
+            </ul>
+        </div>
+
+        <button class="test-button" onclick="testJavaScriptDownloadDetection()">🧪 Test JavaScript Download Detection</button>
+        <button class="test-button" onclick="testExternalLinkFiltering()">🧪 Test External Link Filtering</button>
+        <button class="test-button" onclick="testFullDetectionLogic()">🧪 Test Full Detection Logic</button>
+
+        <div id="test-results" class="result" style="display: none;">
+            <h4>Test Results:</h4>
+            <pre id="test-output"></pre>
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>📋 Implementation Details</h2>
+        
+        <div class="test-case">
+            <h3>🔧 Fixed Detection Logic:</h3>
+            <div class="html-structure">// Enhanced HTML file detection in offscreen.js
+if (isHtmlFile) {
+  // Check for existing download link (both href and onclick patterns)
+  const existingDownloadLink = container.querySelector('a[href*="/Documents/Download/"]');
+  const jsDownloadLink = container.querySelector('a[onclick*="/Documents/Download/"]');
+  
+  if (existingDownloadLink) {
+    // Use existing href download link
+    downloadUrl = existingDownloadLink.getAttribute('href');
+  } else if (jsDownloadLink) {
+    // Extract download URL from onclick JavaScript
+    const onclickAttr = jsDownloadLink.getAttribute('onclick');
+    const urlMatch = onclickAttr.match(/window\.open\("([^"]*)"/) || 
+                     onclickAttr.match(/window\.open\('([^']*)'/);
+    if (urlMatch && urlMatch[1]) {
+      downloadUrl = urlMatch[1];
+    }
+  }
+}</div>
+        </div>
+
+        <div class="test-case">
+            <h3>🎯 Key Improvements:</h3>
+            <ul>
+                <li><strong>JavaScript Detection:</strong> Now checks for <code>onclick</code> attributes containing download URLs</li>
+                <li><strong>URL Extraction:</strong> Uses regex to extract URLs from <code>window.open()</code> calls</li>
+                <li><strong>Fallback Support:</strong> Still constructs URLs if no download mechanism is found</li>
+                <li><strong>Preview Filtering:</strong> External links in <code>.smsc_cm_body_row_block_inline</code> are properly ignored</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function testJavaScriptDownloadDetection() {
+            const resultsDiv = document.getElementById('test-results');
+            const outputPre = document.getElementById('test-output');
+            
+            // Simulate the detection logic
+            const container = document.getElementById('docID_411262');
+            const jsDownloadLink = container.querySelector('a[onclick*="/Documents/Download/"]');
+            
+            let results = 'JavaScript Download Detection Test:\n\n';
+            
+            if (jsDownloadLink) {
+                results += '✅ Found JavaScript download link\n';
+                
+                const onclickAttr = jsDownloadLink.getAttribute('onclick');
+                results += `📝 Onclick attribute: ${onclickAttr}\n\n`;
+                
+                const urlMatch = onclickAttr.match(/window\.open\("([^"]*)"/) || onclickAttr.match(/window\.open\('([^']*)'/);
+                
+                if (urlMatch && urlMatch[1]) {
+                    results += `✅ Successfully extracted download URL: ${urlMatch[1]}\n`;
+                    results += `📁 Filename would be: ${jsDownloadLink.textContent.trim()}.html\n`;
+                } else {
+                    results += '❌ Failed to extract URL from onclick\n';
+                }
+            } else {
+                results += '❌ No JavaScript download link found\n';
+            }
+            
+            outputPre.textContent = results;
+            resultsDiv.style.display = 'block';
+        }
+
+        function testExternalLinkFiltering() {
+            const resultsDiv = document.getElementById('test-results');
+            const outputPre = document.getElementById('test-output');
+            
+            const container = document.getElementById('docID_411262');
+            const previewContent = container.querySelector('.smsc_cm_body_row_block_inline');
+            const externalLinks = previewContent.querySelectorAll('a[href*="st-andrews.ac.uk"]');
+            
+            let results = 'External Link Filtering Test:\n\n';
+            
+            results += `📋 Found ${externalLinks.length} external link(s) in preview content\n`;
+            
+            externalLinks.forEach((link, index) => {
+                results += `🔗 External link ${index + 1}: ${link.href}\n`;
+            });
+            
+            // Test the CSS selector that should exclude these
+            const wouldBeSelected = container.querySelectorAll('a[href$=".html"]:not(.smsc_cm_body_row_block_inline a)');
+            results += `\n✅ CSS selector excludes preview links: ${wouldBeSelected.length === 0 ? 'YES' : 'NO'}\n`;
+            
+            if (wouldBeSelected.length === 0) {
+                results += '🎯 External links properly filtered out by CSS selector\n';
+            } else {
+                results += '❌ External links not properly filtered\n';
+            }
+            
+            outputPre.textContent = results;
+            resultsDiv.style.display = 'block';
+        }
+
+        function testFullDetectionLogic() {
+            const resultsDiv = document.getElementById('test-results');
+            const outputPre = document.getElementById('test-output');
+            
+            let results = 'Full Detection Logic Test:\n\n';
+            
+            // Simulate the complete detection process
+            const container = document.getElementById('docID_411262');
+            const docId = container.id.replace('docID_', '');
+            
+            results += `🆔 Extracted docID: ${docId}\n`;
+            
+            // Check if it's detected as HTML file
+            const mimeElement = container.querySelector('.smsc_cm_body_row_block_mime');
+            const isHtmlFile = mimeElement && mimeElement.textContent.toLowerCase().includes('html');
+            
+            results += `📄 Detected as HTML file: ${isHtmlFile ? 'YES' : 'NO'}\n`;
+            
+            if (isHtmlFile) {
+                // Check for existing download links
+                const existingDownloadLink = container.querySelector('a[href*="/Documents/Download/"]');
+                const jsDownloadLink = container.querySelector('a[onclick*="/Documents/Download/"]');
+                
+                results += `🔗 Has href download link: ${existingDownloadLink ? 'YES' : 'NO'}\n`;
+                results += `📜 Has onclick download link: ${jsDownloadLink ? 'YES' : 'NO'}\n`;
+                
+                if (jsDownloadLink) {
+                    const onclickAttr = jsDownloadLink.getAttribute('onclick');
+                    const urlMatch = onclickAttr.match(/window\.open\("([^"]*)"/) || onclickAttr.match(/window\.open\('([^']*)'/);
+                    
+                    if (urlMatch && urlMatch[1]) {
+                        const downloadUrl = urlMatch[1];
+                        const fileName = jsDownloadLink.textContent.trim() + '.html';
+                        
+                        results += `\n✅ FINAL RESULT:\n`;
+                        results += `📁 File: ${fileName}\n`;
+                        results += `🔗 URL: ${downloadUrl}\n`;
+                        results += `🎯 Detection: SUCCESS\n`;
+                    }
+                }
+            }
+            
+            // Test external link filtering
+            const previewLinks = container.querySelectorAll('.smsc_cm_body_row_block_inline a');
+            results += `\n🚫 External preview links found: ${previewLinks.length}\n`;
+            previewLinks.forEach((link, index) => {
+                results += `   ${index + 1}. ${link.href} (FILTERED OUT)\n`;
+            });
+            
+            outputPre.textContent = results;
+            resultsDiv.style.display = 'block';
+        }
+
+        // Auto-run initial test
+        window.addEventListener('load', function() {
+            console.log('🧪 SmartSchool HTML Download Detection Test Page Loaded');
+            console.log('💡 Click the test buttons to verify the detection logic');
+        });
+    </script>
+</body>
+</html>

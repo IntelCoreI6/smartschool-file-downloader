@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "SmartSchool Downloader",
+  "version": "2.0",
+  "description": "Downloads files from SmartSchool course pages as a ZIP.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "scripting",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "*://spc.smartschool.be/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://spc.smartschool.be/Documents/Index/Index*"],
+      "js": ["content.js"],
+      "css": ["style.css"]
+    }
+  ],  "action": {
+    "default_title": "SmartSchool Downloader",
+    "default_popup": "popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["jszip.min.js"],
+      "matches": ["*://spc.smartschool.be/*"]
+    }
+  ]
+}

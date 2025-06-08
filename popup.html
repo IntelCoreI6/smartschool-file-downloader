@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SmartSchool Downloader</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="popup-container">
+        <div class="header">
+            <div class="header-icon">📥</div>
+            <div class="header-text">
+                <h1>SmartSchool Downloads</h1>
+                <p id="status-summary">No active downloads</p>
+            </div>
+        </div>
+        
+        <div class="downloads-container" id="downloads-container">
+            <div class="no-downloads" id="no-downloads">
+                <div class="no-downloads-icon">📂</div>
+                <p>No downloads in progress</p>
+                <small>Navigate to a SmartSchool page and click "Download All as ZIP" to start</small>
+            </div>
+        </div>
+          <div class="footer">
+            <button id="clear-completed" class="clear-btn" style="display: none;">
+                Clear Completed
+            </button>
+            <button id="clear-cache" class="cache-clear-btn">
+                🧹 Clear All Caches
+            </button>
+        </div>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

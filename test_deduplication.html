@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Deduplication Logic</title>
+</head>
+<body>
+    <h1>Extension Deduplication Test</h1>
+    
+    <!-- Simulate SmartSchool file structure with duplicate detection -->
+    <div class="name">
+        <a class="js-download-link" href="/Documents/Download/file1.pdf" title="Document 1">Document 1.pdf</a>
+        <a class="smsc_cm_link smsc-download__link" href="/Documents/Download/file1.pdf">Document 1.pdf</a>
+    </div>
+    
+    <div class="name">
+        <a class="js-download-link" href="/Documents/Download/file2.docx" title="Document 2">Document 2.docx</a>
+        <a class="smsc_cm_link smsc-download__link" href="/Documents/Download/file2.docx">Document 2.docx</a>
+    </div>
+    
+    <div class="name">
+        <a class="js-download-link" href="/Documents/Download/file3.pptx" title="Presentation">Presentation.pptx</a>
+        <a class="smsc_cm_link smsc-download__link" href="/Documents/Download/file3.pptx">Presentation.pptx</a>
+    </div>
+
+    <script>
+        // Test the file selector used by the extension
+        const fileSelector = 'div.name > a.js-download-link[href*="/Documents/Download/"], div.name > a.smsc_cm_link[href*="/Documents/Download/"]';
+        const foundElements = document.querySelectorAll(fileSelector);
+        
+        console.log(`Found ${foundElements.length} elements with the file selector`);
+        console.log('Without deduplication, this would result in duplicate downloads');
+        
+        // Simulate deduplication logic
+        const fileLinks = Array.from(foundElements).map(link => {
+            const href = link.getAttribute('href');
+            let name = link.title || 'downloaded_file'; 
+            const parentDivName = link.closest('div.name');
+            if (parentDivName) {
+                const nameLink = parentDivName.querySelector('a.smsc_cm_link.smsc-download__link');
+                if (nameLink) {
+                    name = nameLink.cloneNode(true).childNodes[0]?.textContent.trim() || nameLink.textContent.trim(); 
+                }
+            }
+            return {
+                href: href,
+                textContent: name,
+                absoluteUrl: new URL(href, window.location.href).href
+            };
+        });
+        
+        // Deduplication
+        const uniqueFileLinks = [];
+        const seenUrls = new Set();
+        
+        for (const fileLink of fileLinks) {
+            if (!seenUrls.has(fileLink.absoluteUrl)) {
+                seenUrls.add(fileLink.absoluteUrl);
+                uniqueFileLinks.push(fileLink);
+            } else {
+                console.log(`Duplicate file URL detected and skipped: ${fileLink.absoluteUrl}`);
+            }
+        }
+        
+        console.log(`Original count: ${fileLinks.length}, After deduplication: ${uniqueFileLinks.length}`);
+        console.log('Unique files:', uniqueFileLinks);
+    </script>
+</body>
+</html>

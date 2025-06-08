@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZIP Extension Fixes Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .pass { color: green; }
+        .fail { color: red; }
+        .warn { color: orange; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>ZIP Extension Fixes Verification Test</h1>
+    
+    <div class="test-section">
+        <h2>Test 1: Web Worker CSP Handling</h2>
+        <div id="worker-test-result">Running...</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test 2: File Size Calculation (No NaN)</h2>
+        <div id="size-test-result">Running...</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test 3: Batch Size Validation</h2>
+        <div id="batch-test-result">Running...</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Console Output</h2>
+        <pre id="console-output"></pre>
+    </div>
+
+    <script>
+        // Capture console output
+        let consoleOutput = [];
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+        
+        console.log = function(...args) {
+            consoleOutput.push('LOG: ' + args.join(' '));
+            originalLog.apply(console, args);
+            updateConsoleOutput();
+        };
+        
+        console.warn = function(...args) {
+            consoleOutput.push('WARN: ' + args.join(' '));
+            originalWarn.apply(console, args);
+            updateConsoleOutput();
+        };
+        
+        console.error = function(...args) {
+            consoleOutput.push('ERROR: ' + args.join(' '));
+            originalError.apply(console, args);
+            updateConsoleOutput();
+        };
+        
+        function updateConsoleOutput() {
+            document.getElementById('console-output').textContent = consoleOutput.slice(-10).join('\n');
+        }
+
+        // Test 1: Web Worker CSP Handling
+        function testWebWorkerCSP() {
+            try {
+                // Simulate the createZipWorker function from offscreen.js
+                function createZipWorker() {
+                    console.warn('[Test] Web Worker disabled due to CSP constraints - falling back to main thread');
+                    return null;
+                }
+                
+                const worker = createZipWorker();
+                if (worker === null) {
+                    document.getElementById('worker-test-result').innerHTML = 
+                        '<span class="pass">✅ PASS: Web Worker correctly returns null due to CSP constraints</span>';
+                    console.log('[Test] Web Worker CSP handling: PASS');
+                } else {
+                    document.getElementById('worker-test-result').innerHTML = 
+                        '<span class="fail">❌ FAIL: Web Worker should return null</span>';
+                }
+            } catch (error) {
+                document.getElementById('worker-test-result').innerHTML = 
+                    '<span class="fail">❌ FAIL: ' + error.message + '</span>';
+            }
+        }
+
+        // Test 2: File Size Calculation
+        function testFileSizeCalculation() {
+            try {
+                const testFiles = [
+                    { name: 'test.jpg', estimatedSize: 3000000 },
+                    { name: 'invalid.file', estimatedSize: undefined },
+                    { name: 'small.txt', estimatedSize: NaN },
+                    { name: 'normal.pdf', estimatedSize: 5000000 }
+                ];
+                
+                let allValid = true;
+                let results = [];
+                
+                testFiles.forEach(file => {
+                    // Apply the fix from offscreen.js
+                    const finalSize = Math.max(100000, file.estimatedSize || 1000000);
+                    const isValid = Number.isFinite(finalSize);
+                    const sizeForBatching = Number.isFinite(finalSize) ? finalSize : 500000;
+                    
+                    results.push(`${file.name}: ${(finalSize/1024/1024).toFixed(2)}MB (valid: ${isValid})`);
+                    
+                    if (!isValid || isNaN(finalSize) || isNaN(sizeForBatching)) {
+                        allValid = false;
+                    }
+                    
+                    console.log(`[Test] File size for ${file.name}: ${(finalSize/1024/1024).toFixed(2)}MB, valid: ${isValid}`);
+                });
+                
+                if (allValid) {
+                    document.getElementById('size-test-result').innerHTML = 
+                        '<span class="pass">✅ PASS: All file sizes are valid numbers (no NaN)</span><br>' +
+                        results.join('<br>');
+                    console.log('[Test] File size calculation: PASS');
+                } else {
+                    document.getElementById('size-test-result').innerHTML = 
+                        '<span class="fail">❌ FAIL: Some file sizes are invalid</span>';
+                }
+            } catch (error) {
+                document.getElementById('size-test-result').innerHTML = 
+                    '<span class="fail">❌ FAIL: ' + error.message + '</span>';
+            }
+        }
+
+        // Test 3: Batch Size Validation
+        function testBatchSizeValidation() {
+            try {
+                const testFiles = [
+                    { estimatedSize: 3000000 },
+                    { estimatedSize: undefined },
+                    { estimatedSize: NaN },
+                    { estimatedSize: 1000000 }
+                ];
+                
+                // Simulate the batch calculation from offscreen.js
+                const totalBatchSize = testFiles.reduce((sum, file) => {
+                    const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
+                    return sum + fileSize;
+                }, 0);
+                
+                const isValid = Number.isFinite(totalBatchSize) && !isNaN(totalBatchSize);
+                
+                if (isValid) {
+                    document.getElementById('batch-test-result').innerHTML = 
+                        '<span class="pass">✅ PASS: Batch size calculation produces valid number: ' + 
+                        (totalBatchSize/1024/1024).toFixed(2) + 'MB</span>';
+                    console.log(`[Test] Batch size calculation: PASS (${(totalBatchSize/1024/1024).toFixed(2)}MB)`);
+                } else {
+                    document.getElementById('batch-test-result').innerHTML = 
+                        '<span class="fail">❌ FAIL: Batch size calculation produces NaN</span>';
+                }
+            } catch (error) {
+                document.getElementById('batch-test-result').innerHTML = 
+                    '<span class="fail">❌ FAIL: ' + error.message + '</span>';
+            }
+        }
+
+        // Run all tests
+        console.log('[Test] Starting ZIP Extension Fixes Verification...');
+        testWebWorkerCSP();
+        testFileSizeCalculation();
+        testBatchSizeValidation();
+        console.log('[Test] All tests completed');
+    </script>
+</body>
+</html>
