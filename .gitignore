@@ -1,0 +1,42 @@
+# Chrome Extension specific
+*.pem
+*.crx
+dist/
+build/
+
+# Development files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node modules (if using build tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Optional: Test and documentation files (uncomment if you want to exclude them)
+# test_*.html
+# test_*.js
+# performance_test.*
+# *.md
