@@ -9,7 +9,7 @@ const FILENAME_REGEX = /filename=["']?([^;"']+)["']?/i;
 const EXTENSION_VALIDATION_REGEX = /^[a-zA-Z0-9]+$/;
 const QUICK_HTML_CHECK_REGEX = /<!DOCTYPE|<html|<body|<head/i; // Optimized HTML detection
 
-// Helper function caches and performance optimizations with improved efficiency
+// Helper function caches and performance optimizations
 const extensionCache = new Map();
 const urlCache = new Map();
 const domQueryCache = new Map();
@@ -320,356 +320,179 @@ function getFileExtensionFromUrl(url) {
   }
 }
 
+// Function to process each child element in the container
+function processRow(row, baseUrl) {
+  try {
+    const baseUrlObj = new URL(baseUrl);
+
+    // Check for folder icon
+    const folderIcon = row.querySelector('.smsc_cm_body_row_block[style*="mime_folder"]');
+    const folderLink = row.querySelector('a.smsc_cm_link');
+
+    if (folderIcon && folderLink) {
+      const href = folderLink.getAttribute('href');
+      const absoluteUrl = new URL(href, baseUrlObj.origin).href;
+      const textContent = folderLink.textContent.trim();
+      
+      if (textContent && absoluteUrl) {
+        console.log(`[Offscreen] Found folder: ${textContent} -> ${absoluteUrl}`);
+        return {
+          type: 'folder',
+          href: href,
+          textContent: textContent,
+          absoluteUrl: absoluteUrl
+        };
+      }
+    }
+
+    // Check for file download link
+    const downloadLink = row.querySelector('a.js-download-link');
+    const fileLink = row.querySelector('a.smsc_cm_link');
+
+    if (downloadLink && fileLink) {
+      const href = downloadLink.getAttribute('href');
+      const absoluteUrl = new URL(href, baseUrlObj.origin).href;
+      let fileName = fileLink.textContent.trim();
+
+      if (!fileName) {
+        fileName = 'downloaded_file';
+      }
+
+      console.log(`[Offscreen] Found file: ${fileName} -> ${absoluteUrl}`);
+      return {
+        type: 'file',
+        href: href,
+        textContent: fileName,
+        absoluteUrl: absoluteUrl
+      };
+    }
+    
+    // Fallback for files that might not have a direct download link but are presented as files
+    if(fileLink && !folderIcon) {
+        const href = fileLink.getAttribute('href');
+        if (href) {
+            const absoluteUrl = new URL(href, baseUrlObj.origin).href;
+            let fileName = fileLink.textContent.trim();
+
+            // This could be a preview link, we might need to construct a download link
+            // For now, let's assume it might be downloadable or at least identifiable
+            console.log(`[Offscreen] Found potential file (no direct download link): ${fileName} -> ${absoluteUrl}`);
+            return {
+                type: 'file',
+                href: href, // This might not be a direct download link
+                textContent: fileName,
+                absoluteUrl: absoluteUrl,
+                isHtmlFile: true // Assume it's a page to be saved as HTML
+            };
+        }
+    }
+
+
+    return null;
+  } catch (error) {
+    console.warn('[Offscreen] Error processing row:', error, row);
+    return null;
+  }
+}
+
+
 // Listen for messages from the background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log("[Offscreen] Message received:", request); // DEBUG
 
   if (request.action === 'parseHtml') {
-    console.log("[Offscreen] Action 'parseHtml' received. HTML string length:", request.htmlString ? request.htmlString.length : 'undefined'); // DEBUG
-    console.log("[Offscreen] Base URL received:", request.baseUrl); // DEBUG
-    console.log("[Offscreen] File query detail:", request.fileQueryDetail, "Folder query detail:", request.folderQueryDetail); // DEBUG
+    console.log("[Offscreen] Action 'parseHtml' received. HTML string length:", request.htmlString ? request.htmlString.length : 'undefined');
+    console.log("[Offscreen] Base URL received:", request.baseUrl);
     
     try {
       const parser = new DOMParser();
       const doc = parser.parseFromString(request.htmlString, 'text/html');
-      const rawFileElements = doc.querySelectorAll(request.fileQueryDetail.selector);
-      const rawFolderElements = doc.querySelectorAll(request.folderQueryDetail.selector);
-      
-      console.log(`[Offscreen] Found ${rawFileElements.length} raw file elements using selector: '${request.fileQueryDetail.selector}'.`); // DEBUG
-      console.log(`[Offscreen] Found ${rawFolderElements.length} raw folder elements using selector: '${request.folderQueryDetail.selector}'.`); // DEBUG
-      
-      // Special handling for HTML files without explicit download buttons
-      // Look for file containers that have HTML file info but no download links
-      const htmlFileContainers = doc.querySelectorAll('div[id^="docID_"]');
-      const additionalHtmlFiles = [];
-      
-      // Pre-cache DOM queries for better performance
-      const baseUrl = new URL(request.baseUrl);
-      const pathParts = baseUrl.pathname.split('/');
-      const courseIdIndex = pathParts.indexOf('courseID');
-      const ssIdIndex = pathParts.indexOf('ssID');
-      
-      // Only process HTML files if we can construct URLs
-      if (courseIdIndex !== -1 && ssIdIndex !== -1) {
-        const courseId = pathParts[courseIdIndex + 1];
-        const ssId = pathParts[ssIdIndex + 1];
-        
-        htmlFileContainers.forEach(container => {
-          const docId = container.id.replace('docID_', '');
-          
-          // Optimized HTML file detection with cached queries
-          let isHtmlFile = false;
-          
-          // Check fileinfo first (fastest)
-          const fileInfo = container.querySelector('.fileinfo, .file-info');
-          if (fileInfo) {
-            const fileInfoText = cachedToLowerCase(fileInfo.textContent);
-            isHtmlFile = fileInfoText.includes('html') || fileInfoText.includes('htm');
-          }
-          
-          // Only check preview block if fileInfo check failed (performance optimization)
-          if (!isHtmlFile) {
-            const previewBlock = container.querySelector('.smsc_cm_body_row_block_inline');
-            if (previewBlock) {
-              const previewContent = previewBlock.innerHTML;
-              // Use faster regex check instead of multiple includes()
-              isHtmlFile = QUICK_HTML_CHECK_REGEX.test(previewContent);
-            }
-          }
-            if (isHtmlFile) {
-            // Check for existing download link (both href and onclick patterns)
-            const existingDownloadLink = container.querySelector('a[href*="/Documents/Download/"]');
-            const jsDownloadLink = container.querySelector('a[onclick*="/Documents/Download/"]');
-            
-            let downloadUrl = null;
-            let fileName = 'file.html';
-            
-            // Extract filename from the container
-            const nameElement = container.querySelector('.name a.smsc_cm_link');
-            if (nameElement) {
-              let extractedName = nameElement.textContent.trim();
-              if (extractedName && !cachedToLowerCase(extractedName).endsWith('.html')) {
-                extractedName += '.html';
-              }
-              if (extractedName) {
-                fileName = extractedName;
-              }
-            }
-            
-            if (existingDownloadLink) {
-              // Use existing href download link
-              downloadUrl = existingDownloadLink.getAttribute('href');
-              if (!downloadUrl.startsWith('http')) {
-                downloadUrl = baseUrl.origin + downloadUrl;
-              }
-              console.log(`[Offscreen] Found HTML file with direct download link: ${fileName} -> ${downloadUrl}`);
-            } else if (jsDownloadLink) {
-              // Extract download URL from onclick JavaScript
-              const onclickAttr = jsDownloadLink.getAttribute('onclick');
-              const urlMatch = onclickAttr.match(/window\.open\("([^"]*)"/) || onclickAttr.match(/window\.open\('([^']*)'/);
-              if (urlMatch && urlMatch[1]) {
-                downloadUrl = urlMatch[1];
-                if (!downloadUrl.startsWith('http')) {
-                  downloadUrl = baseUrl.origin + downloadUrl;
-                }
-                console.log(`[Offscreen] Found HTML file with JavaScript download: ${fileName} -> ${downloadUrl}`);
-              }
-            }
-            
-            if (!downloadUrl) {
-              // Construct the download URL for HTML files without any download mechanism
-              try {
-                // Try multiple URL patterns for SmartSchool HTML files
-                const urlPatterns = [
-                  `${baseUrl.origin}/Documents/Download/Index/htm/1/courseID/${courseId}/docID/${docId}/ssID/${ssId}`,
-                  `${baseUrl.origin}/Documents/Download/courseID/${courseId}/docID/${docId}/ssID/${ssId}`,
-                  `${baseUrl.origin}/Documents/Download/Index/html/1/courseID/${courseId}/docID/${docId}/ssID/${ssId}`,
-                  `${baseUrl.origin}/Documents/Download/${docId}/courseID/${courseId}/ssID/${ssId}`
-                ];
-                
-                // Try the first URL pattern (most common)
-                downloadUrl = urlPatterns[0];
-                console.log(`[Offscreen] Constructed HTML download URL for file without download mechanism: ${fileName} -> ${downloadUrl}`);
-                
-                additionalHtmlFiles.push({
-                  href: downloadUrl,
-                  textContent: fileName,
-                  absoluteUrl: downloadUrl,
-                  isHtmlFile: true, // Mark as HTML file for special processing
-                  alternativeUrls: urlPatterns.slice(1) // Store alternative URLs to try if first fails
-                });
-              } catch (error) {
-                console.warn(`[Offscreen] Error constructing HTML download URL for docID ${docId}:`, error);
-              }
-            } else {
-              // Add HTML file with existing download mechanism
-              additionalHtmlFiles.push({
-                href: downloadUrl,
-                textContent: fileName,
-                absoluteUrl: downloadUrl,
-                isHtmlFile: true // Mark as HTML file for special processing
-              });
-            }
-          }
-        });
-      }
-      
-      console.log(`[Offscreen] Found ${additionalHtmlFiles.length} additional HTML files without download buttons`); // DEBUG
-      
-      const fileLinks = Array.from(rawFileElements).map(link => {
-        const href = link.getAttribute('href');
-        let name = link.title || 'downloaded_file';
-        
-        // Enhanced file name extraction logic
-        // Try to get the file name from various sources in order of preference
-        
-        // 1. Try to get name from the traditional SmartSchool structure
-        const parentDivName = link.closest('div.name');
-        if (parentDivName) {
-            const nameLink = parentDivName.querySelector('a.smsc_cm_link.smsc-download__link');
-            if (nameLink) {
-                // Clone the link to manipulate it without affecting the DOM
-                const clonedLink = nameLink.cloneNode(true);
-                // Remove any nested download buttons to get just the filename text
-                const nestedDownloadLinks = clonedLink.querySelectorAll('a.js-download-link, .download-link');
-                nestedDownloadLinks.forEach(nestedLink => nestedLink.remove());
-                // Get the clean text content
-                const cleanName = clonedLink.textContent?.trim();
-                if (cleanName) {
-                    name = cleanName;
-                }
-            }
-        }
-        
-        // 2. If we still don't have a good name, try the link's text content
-        if (!name || name === 'downloaded_file') {
-            const linkText = link.textContent?.trim();
-            if (linkText && linkText.length > 0 && linkText.length < 200) { // Reasonable filename length
-                name = linkText;
-            }
-        }
-        
-        // 3. If we still don't have a good name, try to extract from the URL
-        if (!name || name === 'downloaded_file') {
-            const urlParts = href.split('/');
-            const lastPart = urlParts[urlParts.length - 1];
-            if (lastPart && hasFileExtension(lastPart)) {
-                name = decodeURIComponent(lastPart);
-            } else {
-                // Try to get filename from URL parameters
-                try {
-                    const url = new URL(href, request.baseUrl);
-                    const filename = url.searchParams.get('filename') || url.searchParams.get('file');
-                    if (filename) {
-                        name = decodeURIComponent(filename);
-                    }
-                } catch (e) {
-                    console.warn("[Offscreen] Error parsing URL for filename:", e);
-                }
-            }
-        }
-        
-        // 4. If we still don't have a name, generate one from the URL
-        if (!name || name === 'downloaded_file') {
-            const urlParts = href.split('/');
-            const lastPart = urlParts[urlParts.length - 1];
-            
-            // If URL ends with an extension, use it
-            if (lastPart && hasFileExtension(lastPart)) {
-                name = decodeURIComponent(lastPart);
-            } else {
-                // Generate a name from the URL path
-                name = 'file_' + Math.random().toString(36).substr(2, 8);
-                console.warn(`[Offscreen] Generated filename for ${href}: ${name}`);
-            }
-        }
-        
-        console.log(`[Offscreen] Processed file: ${name} (href: ${href})`);
-        
-        // Filter out non-file links (breadcrumbs, navigation, etc.)
-        const isLikelyFile = href.includes('/Documents/Download/') ||
-                           href.includes('download') ||
-                           href.includes('attachment') ||
-                           href.includes('file');
-                           
-        if (!isLikelyFile) {
-            console.log(`[Offscreen] Skipping non-file link: ${name} (${href})`);
-            return null;
-        }
-        
-        console.log(`[Offscreen] Found potential file: ${name} (${href})`);
-        
-        return {
-            href: href,
-            textContent: name,
-            absoluteUrl: new URL(href, request.baseUrl).href
-        };
-      }).filter(fileLink => fileLink !== null); // Remove null entries (breadcrumbs, navigation, etc.)
 
-      // Deduplicate files by absoluteUrl to avoid downloading the same file twice
-      const uniqueFileLinks = [];
-      const seenUrls = new Set();
-      
-      // Add regular file links
-      for (const fileLink of fileLinks) {
-        if (!seenUrls.has(fileLink.absoluteUrl)) {
-          seenUrls.add(fileLink.absoluteUrl);
-          uniqueFileLinks.push(fileLink);
-        } else {
-          console.log(`[Offscreen] Duplicate file URL detected and skipped: ${fileLink.absoluteUrl}`);
-        }
+      const container = doc.querySelector('.smsc_cm_body');
+      if (!container) {
+        throw new Error('Container .smsc_cm_body not found in the HTML.');
       }
-      
-      // Add additional HTML files
-      for (const htmlFile of additionalHtmlFiles) {
-        if (!seenUrls.has(htmlFile.absoluteUrl)) {
-          seenUrls.add(htmlFile.absoluteUrl);
-          uniqueFileLinks.push(htmlFile);
-        } else {
-          console.log(`[Offscreen] Duplicate HTML file URL detected and skipped: ${htmlFile.absoluteUrl}`);
+
+      const rows = container.querySelectorAll('.smsc_cm_body_row');
+      console.log(`[Offscreen] Found ${rows.length} rows in the container.`);
+
+      const fileLinks = [];
+      const folderLinks = [];
+
+      rows.forEach(row => {
+        const result = processRow(row, request.baseUrl);
+        if (result) {
+          if (result.type === 'file') {
+            fileLinks.push(result);
+          } else if (result.type === 'folder') {
+            folderLinks.push(result);
+          }
+        }
+      });
+
+      // Deduplicate files and folders to prevent redundant processing
+      const uniqueFileLinks = [...new Map(fileLinks.map(item => [item.absoluteUrl, item])).values()];
+      const uniqueFolderLinks = [...new Map(folderLinks.map(item => [item.absoluteUrl, item])).values()];
+
+      // Extract title for ZIP filename
+      let zipFileName = doc.querySelector('#smscTopContainer > nav > h1')?.textContent.trim();
+      if (!zipFileName) {
+        const breadcrumbLinks = doc.querySelectorAll('.smsc_cm_breadcrumb a');
+        if (breadcrumbLinks.length > 0) {
+          zipFileName = breadcrumbLinks[breadcrumbLinks.length - 1].textContent.trim();
         }
       }
 
-      const folderLinks = Array.from(rawFolderElements).map(link => ({
-        href: link.getAttribute('href'),
-        textContent: link.textContent.trim(),
-        absoluteUrl: new URL(link.getAttribute('href'), request.baseUrl).href
-      }));
+      console.log(`[Offscreen] Final counts - Files: ${uniqueFileLinks.length}, Folders: ${uniqueFolderLinks.length}`);
 
-      // Extract title for ZIP filename from topnav
-      let zipFileName = null;
-      const titleElement = doc.querySelector('#smscTopContainer > nav > h1');
-      if (titleElement) {
-        zipFileName = titleElement.textContent.trim();
-        console.log(`[Offscreen] Found title for ZIP filename: ${zipFileName}`);
-      } else {
-        // Fallback to breadcrumb if title not found
-        const breadcrumbElement = doc.querySelector('.smsc_cm_breadcrumb') || 
-                                 doc.querySelector('#smscMain > table > tbody > tr:nth-child(2) > td:nth-child(2) > div.smsc_cm_breadcrumb');
-        if (breadcrumbElement) {
-          const breadcrumbLinks = breadcrumbElement.querySelectorAll('a');
-          if (breadcrumbLinks.length > 0) {
-            const lastBreadcrumb = breadcrumbLinks[breadcrumbLinks.length - 1];
-            zipFileName = lastBreadcrumb.textContent.trim();
-            console.log(`[Offscreen] Fallback: Found breadcrumb name for ZIP: ${zipFileName}`);
-          }
-        }
-      }
-
-      console.log("[Offscreen] Original fileLinks count:", fileLinks.length);
-      console.log("[Offscreen] Deduplicated fileLinks count:", uniqueFileLinks.length);
-      console.log("[Offscreen] Parsed folderLinks:", folderLinks); // DEBUG
-
-      // This sends a NEW message to background.js, not a reply to 'parseHtml'
       chrome.runtime.sendMessage({
         action: 'parsedHtmlResponse',
         downloadId: request.downloadId,
-        fileLinks: uniqueFileLinks, // Use deduplicated list
-        folderLinks: folderLinks,
-        zipFileName: zipFileName, // Use title from h1 element or fallback to breadcrumb
+        fileLinks: uniqueFileLinks,
+        folderLinks: uniqueFolderLinks,
+        zipFileName: zipFileName,
         originalUrl: request.baseUrl,
         pathPrefix: request.pathPrefix
       });
-    } catch (e) {
-      console.error('[Offscreen] Error parsing HTML:', e); // DEBUG
-      
-      // This also sends a NEW message
+    } catch (error) {
+      console.error("[Offscreen] Error in parseHtml:", error);
       chrome.runtime.sendMessage({
         action: 'parsedHtmlResponse',
         downloadId: request.downloadId,
-        error: e.toString(),
-        zipFileName: null, // No title found due to error
-        originalUrl: request.baseUrl, 
+        error: error.message,
+        originalUrl: request.baseUrl,
         pathPrefix: request.pathPrefix
       });
     }
-    // 'parseHtml' does not use sendResponse, so it should not return true.
-    // Returning false or undefined is appropriate.
-    return false;  } else if (request.action === 'createAndDownloadZip') {
+    return false; // Indicate that sendResponse will not be used asynchronously
+
+  } else if (request.action === 'createAndDownloadZip') {
     console.log("[Offscreen] Received request to create and download ZIP with", request.files.length, "files");
-    
-    // Handle ZIP creation and download in offscreen (no response needed since it's async)
     createAndDownloadZip(request.files, request.filename, request.downloadId);
-    
-    // Return false since we're not using sendResponse
-    return false;
+    return false; // Not using sendResponse
+
   } else if (request.action === 'clearCaches') {
-    // Clear offscreen document caches
     console.log('[Offscreen] Clearing offscreen document caches...');
-    
     try {
-      // Clear all offscreen caches
       extensionCache.clear();
       urlCache.clear();
       domQueryCache.clear();
       lowerCaseCache.clear();
       fileSystemCleanCache.clear();
       pathJoinCache.clear();
-      requestCache.clear();
-      pendingRequests.clear();
-      
+      // These caches might not be defined in all contexts, so check before clearing
+      if (typeof requestCache !== 'undefined') requestCache.clear();
+      if (typeof pendingRequests !== 'undefined') pendingRequests.clear();
       console.log('[Offscreen] Offscreen document caches cleared successfully');
-      console.log('[Offscreen] Cleared caches:', {
-        extensionCache: 'cleared',
-        urlCache: 'cleared', 
-        domQueryCache: 'cleared',
-        lowerCaseCache: 'cleared',
-        fileSystemCleanCache: 'cleared',
-        pathJoinCache: 'cleared',
-        requestCache: 'cleared',
-        pendingRequests: 'cleared'
-      });
-      
       sendResponse({ success: true });
     } catch (error) {
       console.error('[Offscreen] Error clearing offscreen caches:', error);
       sendResponse({ success: false, error: error.message });
     }
-    
-    return true; // Async response
+    return true; // Indicate asynchronous response
   }
-  // Default for unhandled actions or synchronous actions not using sendResponse.
-  return false; 
+
+  return false; // Default for unhandled actions
 });
 
 // ULTRA-OPTIMIZED ZIP creation function with Web Workers and streaming
@@ -1167,9 +990,11 @@ const preWarmConnections = (() => {
   };
 })();
 
+
 // Advanced request deduplication system
 const requestCache = new Map();
 const pendingRequests = new Map();
+
 
 // Enhanced fetch with intelligent caching and deduplication
 async function enhancedFetch(url, options = {}) {

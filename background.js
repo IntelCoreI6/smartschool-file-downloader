@@ -309,7 +309,7 @@ async function processDownloads(startUrl, downloadId) {
             throw error;
         }
     }    // Helper to parse HTML using the offscreen document
-    async function parseHtmlWithOffscreen(htmlString, baseUrl, pathPrefix, fileSelector, folderSelector) {
+    async function parseHtmlWithOffscreen(htmlString, baseUrl, pathPrefix, containerQuery) {
         await ensureOffscreenDocument(); // Ensure it's still there
         return new Promise((resolve, reject) => {
             htmlParsingResolvers.set(downloadId, { resolve, reject }); // Store resolver with downloadId
@@ -320,8 +320,7 @@ async function processDownloads(startUrl, downloadId) {
                 htmlString: htmlString,
                 baseUrl: baseUrl, // Pass baseUrl for resolving relative links in offscreen
                 pathPrefix: pathPrefix, // Pass pathPrefix for context
-                fileQueryDetail: fileSelector, // Corrected key name
-                folderQueryDetail: folderSelector // Corrected key name
+                containerQueryDetail: containerQuery // Pass container-based query details
             }).catch(err => {
                 console.error("[BackgroundScript] Error sending message to offscreen document:", err);
                 htmlParsingResolvers.delete(downloadId); // Clear resolver on error
@@ -344,63 +343,14 @@ async function processDownloads(startUrl, downloadId) {
         } catch (error) {
             console.warn(`[BackgroundScript] Skipping folder ${currentFolder.url} due to fetch text error:`, error.message);
             continue; // Skip this folder if it can't be fetched
-        }        // Enhanced file selector - support multiple file detection patterns
-        // 1. Traditional download buttons and links
-        // 2. Direct file links with extensions (HTML, PDF, DOC, etc.)
-        // 3. Files that may not be in the typical /Documents/Download/ structure
-        const fileQueryDetail = {
-            selector: [
-                // Traditional SmartSchool download links
-                'div.name > a.js-download-link[href*="/Documents/Download/"]:not(.smsc_cm_breadcrumb)',
-                'div.name > a.smsc_cm_link[href*="/Documents/Download/"]:not(.smsc_cm_breadcrumb)',
-                  // Direct file links with common extensions (case-insensitive)
-                // Exclude links inside preview content blocks to avoid external URLs
-                'a[href$=".html"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".htm"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".pdf"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".doc"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".docx"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".txt"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".csv"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".json"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".xml"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".xls"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".xlsx"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".ppt"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".pptx"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".rtf"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".odt"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".ods"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                
-                // Image files
-                'a[href$=".jpg"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".jpeg"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".png"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".gif"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".svg"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".bmp"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                
-                // Archive files
-                'a[href$=".zip"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".rar"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".7z"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                  // Media files
-                'a[href$=".mp3"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".mp4"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".avi"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)',
-                'a[href$=".wav"]:not(.smsc_cm_breadcrumb):not([class*="breadcrumb"]):not(.smsc_cm_body_row_block_inline a)'
-            ].join(', '),
-            // Name extraction will be handled in offscreen.js based on this link
-        };
-        const folderQueryDetail = {
-            selector: 'div.name > a.smsc_cm_link:not(.smsc-download__link):not(.smsc_cm_breadcrumb)[href*="/Documents/Index/Index/"]:not(.smsc_cm_breadcrumb a):not([class*="breadcrumb"])',
-            // Name can be link.textContent.trim()
-            // Href is link.getAttribute('href')
-        };
-
-        try {
+        }        // NEW CONTAINER-BASED APPROACH: Use the specific container and examine each child
+        // Instead of CSS selectors, we'll target the main content container and analyze children
+        const containerQueryDetail = {
+            containerSelector: '#smscMain > table > tbody > tr:nth-child(3) > td:nth-child(2) > div.smsc_cm_body',
+            // The offscreen script will examine each child of this container
+        };        try {
             console.log(`[BackgroundScript] Requesting parsing for ${currentFolder.url}`);
-            const parsedData = await parseHtmlWithOffscreen(htmlText, currentFolder.url, currentFolder.pathPrefix, fileQueryDetail, folderQueryDetail);            console.log(`[BackgroundScript] Received parsed data for ${parsedData.originalUrl}:`, parsedData);
+            const parsedData = await parseHtmlWithOffscreen(htmlText, currentFolder.url, currentFolder.pathPrefix, containerQueryDetail);console.log(`[BackgroundScript] Received parsed data for ${parsedData.originalUrl}:`, parsedData);
 
             // Capture ZIP filename from the first folder processed
             if (!zipFileName && parsedData.zipFileName) {

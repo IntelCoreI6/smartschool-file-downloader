@@ -167,18 +167,20 @@ function createDownloadButton() {
     window.updateDownloadProgress = (downloadId, current, total, status) => {
         // Only update if this is for our current download
         if (currentDownloadId && downloadId !== currentDownloadId) {
+            console.log(`[ContentScript] Ignoring progress for old download ${downloadId}. Current is ${currentDownloadId}.`);
             return;
         }
         
         // Throttle updates for better performance (except critical updates)
         const now = performance.now();
-        const isCriticalUpdate = status === 'Download completed!' || current === 0 || current === total;
+        const lowerCaseStatus = status.toLowerCase();
+        const isCriticalUpdate = lowerCaseStatus.includes('completed') || lowerCaseStatus.includes('error') || current === 0 || current === total;
         if (!isCriticalUpdate && (now - lastProgressUpdate) < PROGRESS_UPDATE_THROTTLE) {
             return;
         }
         lastProgressUpdate = now;
         
-        console.log(`[ContentScript] Progress update received for ${downloadId}: ${current}/${total} - ${status}`);
+        console.log(`[ContentScript] Progress update received for ${downloadId}: ${current}/${total} - Status: "${status}"`);
         
         // Clear any pending hide timeout since we have an active update
         if (hideStatusTimeout) {
@@ -192,86 +194,104 @@ function createDownloadButton() {
             downloadTimeoutId = null;
         }
         
-        // Determine phase based on status message
-        let currentPhase = 'indexing';
-        let phaseClass = 'phase-indexing';
-        let icon = '🔍';
-        let displayStatus = status;
-        
-        if (status.includes('Downloading:') || status.includes('downloading')) {
-            currentPhase = 'downloading';
-            phaseClass = 'phase-downloading';
-            icon = '⬇️';
-        } else if (status.includes('Generating ZIP') || status.includes('zip')) {
-            currentPhase = 'zipping';
-            phaseClass = 'phase-zipping';
-            icon = '📦';
-        } else if (status === 'Download completed!') {
-            currentPhase = 'completed';
-            phaseClass = 'phase-completed';
-            icon = '✅';
-            displayStatus = 'Download completed!';
-        } else if (status.includes('Starting') || status.includes('indexing') || status.includes('files found')) {
-            currentPhase = 'indexing';
-            phaseClass = 'phase-indexing';
-            icon = '🔍';
+        // Determine phase based on status message for more robust state management
+        let phase = 'indexing'; // Default phase
+
+        if (lowerCaseStatus.includes('error') || lowerCaseStatus.includes('failed') || lowerCaseStatus.includes('cancelled')) {
+            phase = 'error';
+        } else if (lowerCaseStatus.includes('completed')) {
+            phase = 'completed';
+        } else if (lowerCaseStatus.includes('zip')) {
+            phase = 'zipping';
+        } else if (lowerCaseStatus.includes('downloading')) {
+            phase = 'downloading';
+        } else if (lowerCaseStatus.includes('indexing') || lowerCaseStatus.includes('starting') || lowerCaseStatus.includes('found')) {
+            phase = 'indexing';
         }
-        
+
+        console.log(`[ContentScript] Determined phase: ${phase}`);
+
         // Batch DOM updates for better performance
         const { statusDisplay, phaseIcon, phaseText, progressBarBg, progressBarFill, progressText } = cachedElements;
         
-        // Update phase indicator
-        statusDisplay.className = `progress-container ${phaseClass}`;
-        phaseIcon.innerHTML = icon;
-        phaseText.textContent = displayStatus;
-          // Handle different phase logic
-        if (status === 'Download completed!') {
-            downloadInProgress = false;
-            currentDownloadId = null;
-            
-            // Show completion state
-            progressBarBg.className = 'progress-bar-bg completed';
-            progressBarFill.style.width = '100%';
-            progressText.textContent = 'Complete!';
-            
-            // Add bounce animation
-            statusDisplay.classList.add('bounce-in');
-            
-            // Schedule hiding after completion
-            hideStatusTimeout = setTimeout(() => {
-                hideStatus();
-                hideStatusTimeout = null;
-            }, 4000);
-        } else if (currentPhase === 'indexing') {
-            // Indexing phase - show infinite loading
-            downloadInProgress = true;
-            progressBarBg.className = 'progress-bar-bg infinite';
-            progressBarFill.style.width = '100%';
-            progressText.textContent = 'Scanning folders...';
-            
-            // Set fallback timeout
-            downloadTimeoutId = setTimeout(() => {
-                console.warn("[ContentScript] Download timeout - no progress updates received");
-                window.updateDownloadProgress(currentDownloadId, total || 1, total || 1, 'Download completed!');
-            }, 30000);
-        } else if (currentPhase === 'downloading' || currentPhase === 'zipping') {
-            // Download/Zip phase - show actual progress
-            downloadInProgress = true;
-            const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
-            
-            progressBarBg.className = `progress-bar-bg ${currentPhase}`;
-            progressBarFill.style.width = `${percentage}%`;
-            progressText.textContent = `${current}/${total} (${percentage}%)`;
-            
-            // Set fallback timeout
-            downloadTimeoutId = setTimeout(() => {
-                console.warn("[ContentScript] Download timeout - no progress updates received");
-                window.updateDownloadProgress(currentDownloadId, total, total, 'Download completed!');
-            }, 30000);
+        // Set a longer, more realistic timeout for operations
+        const operationTimeout = 120000; // 2 minutes
+
+        // Handle different phase logic
+        switch (phase) {
+            case 'indexing':
+                downloadInProgress = true;
+                statusDisplay.className = 'progress-container phase-indexing';
+                phaseIcon.innerHTML = '🔍';
+                phaseText.textContent = status;
+                progressBarBg.className = 'progress-bar-bg infinite';
+                progressBarFill.style.width = '100%';
+                progressText.textContent = 'Scanning folders...';
+                downloadTimeoutId = setTimeout(() => {
+                    console.warn("[ContentScript] Indexing timeout - no progress updates received");
+                    window.updateDownloadProgress(currentDownloadId, 1, 1, 'Error: Indexing timed out.');
+                }, operationTimeout);
+                break;
+
+            case 'downloading':
+            case 'zipping':
+                downloadInProgress = true;
+                const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
+                const phaseClass = phase === 'downloading' ? 'phase-downloading' : 'phase-zipping';
+                const icon = phase === 'downloading' ? '⬇️' : '📦';
+                
+                statusDisplay.className = `progress-container ${phaseClass}`;
+                phaseIcon.innerHTML = icon;
+                phaseText.textContent = status;
+                progressBarBg.className = `progress-bar-bg ${phase}`;
+                progressBarFill.style.width = `${percentage}%`;
+                progressText.textContent = `${current}/${total} (${percentage}%)`;
+                
+                downloadTimeoutId = setTimeout(() => {
+                    console.warn(`[ContentScript] ${phase} timeout - no progress updates received`);
+                    window.updateDownloadProgress(currentDownloadId, total, total, `Error: ${phase} timed out.`);
+                }, operationTimeout);
+                break;
+
+            case 'completed':
+                downloadInProgress = false;
+                currentDownloadId = null;
+                
+                statusDisplay.className = 'progress-container phase-completed';
+                phaseIcon.innerHTML = '✅';
+                phaseText.textContent = 'Download completed!';
+                progressBarBg.className = 'progress-bar-bg completed';
+                progressBarFill.style.width = '100%';
+                progressText.textContent = 'Complete!';
+                
+                statusDisplay.classList.add('bounce-in');
+                
+                hideStatusTimeout = setTimeout(() => {
+                    hideStatus();
+                    hideStatusTimeout = null;
+                }, 4000);
+                break;
+
+            case 'error':
+                downloadInProgress = false;
+                currentDownloadId = null;
+
+                statusDisplay.className = 'progress-container phase-error';
+                phaseIcon.innerHTML = '❌';
+                phaseText.textContent = status; // Show the actual error message
+                progressBarBg.className = 'progress-bar-bg error';
+                progressBarFill.style.width = '100%';
+                progressText.textContent = 'Failed';
+
+                hideStatusTimeout = setTimeout(() => {
+                    hideStatus();
+                    hideStatusTimeout = null;
+                }, 8000); // Show error for longer
+                break;
         }
         
-        // Ensure status display is visible only if download is in progress or just completed
-        if ((downloadInProgress || status === 'Download completed!') && statusDisplay.style.display === 'none') {
+        // Ensure status display is visible only if download is in progress or just completed/failed
+        if ((downloadInProgress || phase === 'completed' || phase === 'error') && statusDisplay.style.display === 'none') {
             showStatus();
         }
     };
