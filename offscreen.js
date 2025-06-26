@@ -88,18 +88,24 @@ function cleanAndFixFilename(filename, mimeType = null, isHtmlFile = false) {
     }
     return cleanName;
   }
-  
-  // Priority 3: If still no extension and we have a MIME type, add it
-  if (!hasFileExtension(cleanName) && mimeType) {
-    const extension = getExtensionFromMimeType(mimeType);
-    if (extension) {
-      cleanName = cleanName + '.' + extension;
-    } else {
-      cleanName = cleanName + '.file';
-    }
+
+  // If the filename already has a valid extension, we're done.
+  if (hasFileExtension(cleanName)) {
+    return cleanName;
   }
   
-  // Priority 4: If still no extension, add a generic one
+  // Priority 3: If no extension yet, try to get one from the MIME type.
+  if (mimeType) {
+    const extension = getExtensionFromMimeType(mimeType);
+    if (extension) {
+      return cleanName + '.' + extension;
+    }
+    // If MIME type is present but not in our map, return the name as-is.
+    // Better to have no extension than a wrong one like '.file'.
+    return cleanName;
+  }
+  
+  // Priority 4: If still no extension and NO MIME type, add a generic one as a last resort.
   if (!hasFileExtension(cleanName)) {
     cleanName = cleanName + '.file';
   }
@@ -320,6 +326,28 @@ function getFileExtensionFromUrl(url) {
   }
 }
 
+const FILE_TYPE_MAP = new Map([
+  ['pdf-bestand', 'pdf'],
+  ['word-document', 'docx'],
+  ['archief', 'zip'],
+  ['powerpoint-presentatie', 'pptx'],
+  ['excel-werkmap', 'xlsx'],
+  ['afbeelding', 'jpg'],
+  ['video', 'mp4'],
+  ['geluid', 'mp3']
+]);
+
+function getExtensionFromMimeText(mimeText) {
+    if (!mimeText) return null;
+    const lowerMimeText = mimeText.toLowerCase();
+    for (const [key, value] of FILE_TYPE_MAP.entries()) {
+        if (lowerMimeText.includes(key)) {
+            return value;
+        }
+    }
+    return null;
+}
+
 // Function to process each child element in the container
 function processRow(row, baseUrl) {
   try {
@@ -347,15 +375,25 @@ function processRow(row, baseUrl) {
 
     // Check for file download link
     const downloadLink = row.querySelector('a.js-download-link');
-    const fileLink = row.querySelector('a.smsc_cm_link');
+    const fileLinkForDownload = row.querySelector('a.smsc_cm_link');
+    const mimeInfoEl = row.querySelector('.smsc_cm_body_row_block_mime');
 
-    if (downloadLink && fileLink) {
+    if (downloadLink && fileLinkForDownload) {
       const href = downloadLink.getAttribute('href');
       const absoluteUrl = new URL(href, baseUrlObj.origin).href;
-      let fileName = fileLink.textContent.trim();
+      let fileName = fileLinkForDownload.textContent.trim();
 
       if (!fileName) {
         fileName = 'downloaded_file';
+      }
+
+      // Try to get extension from mime text
+      if (mimeInfoEl && !hasFileExtension(fileName)) {
+          const mimeText = mimeInfoEl.textContent;
+          const extension = getExtensionFromMimeText(mimeText);
+          if (extension) {
+              fileName += '.' + extension;
+          }
       }
 
       console.log(`[Offscreen] Found file: ${fileName} -> ${absoluteUrl}`);
@@ -366,23 +404,52 @@ function processRow(row, baseUrl) {
         absoluteUrl: absoluteUrl
       };
     }
-    
-    // Fallback for files that might not have a direct download link but are presented as files
-    if(fileLink && !folderIcon) {
-        const href = fileLink.getAttribute('href');
-        if (href) {
-            const absoluteUrl = new URL(href, baseUrlObj.origin).href;
-            let fileName = fileLink.textContent.trim();
 
-            // This could be a preview link, we might need to construct a download link
-            // For now, let's assume it might be downloadable or at least identifiable
-            console.log(`[Offscreen] Found potential file (no direct download link): ${fileName} -> ${absoluteUrl}`);
+    // Fallback for HTML files opened via onclick
+    const onclickLink = row.querySelector('a.smsc_cm_link[onclick*="window.open"]');
+    if (onclickLink) {
+        const onclickAttr = onclickLink.getAttribute('onclick');
+        const urlMatch = onclickAttr.match(/window\.open\(['"]([^'"\)]+)/);
+
+        if (urlMatch && urlMatch[1]) {
+            const relativeUrl = urlMatch[1];
+            const absoluteUrl = new URL(relativeUrl, baseUrlObj.origin).href;
+            let fileName = onclickLink.textContent.trim();
+
+            if (!fileName) {
+                fileName = 'document';
+            }
+
+            // Ensure it has an .html extension
+            if (!fileName.toLowerCase().endsWith('.html')) {
+                fileName += '.html';
+            }
+
+            console.log(`[Offscreen] Found HTML file via onclick: ${fileName} -> ${absoluteUrl}`);
             return {
                 type: 'file',
-                href: href, // This might not be a direct download link
+                href: relativeUrl,
                 textContent: fileName,
                 absoluteUrl: absoluteUrl,
-                isHtmlFile: true // Assume it's a page to be saved as HTML
+                isHtmlFile: true
+            };
+        }
+    }
+    
+    // Fallback for other potential files
+    if(folderLink && !folderIcon) {
+        const href = folderLink.getAttribute('href');
+        if (href && href !== '#') { // Ensure it's not just a placeholder
+            const absoluteUrl = new URL(href, baseUrlObj.origin).href;
+            let fileName = folderLink.textContent.trim();
+
+            console.log(`[Offscreen] Found potential file (fallback): ${fileName} -> ${absoluteUrl}`);
+            return {
+                type: 'file',
+                href: href,
+                textContent: fileName,
+                absoluteUrl: absoluteUrl,
+                isHtmlFile: true // Assume HTML if type is unknown
             };
         }
     }
@@ -495,471 +562,105 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false; // Default for unhandled actions
 });
 
-// ULTRA-OPTIMIZED ZIP creation function with Web Workers and streaming
+// Simplified ZIP creation function
 async function createAndDownloadZip(files, filename, downloadId) {
-  let streamingZip = null;
-    try {
-    console.log("[Offscreen] Starting ultra-fast ZIP creation with", files.length, "files");
-    
-    // Initialize session tracking
-    const sessionStats = {
-      startTime: performance.now(),
-      totalFiles: files.length,
-      successCount: 0,
-      errorCount: 0,
-      totalDownloadTime: 0,
-      totalDownloadSize: 0,
-      largestFile: { name: '', size: 0 },
-      smallestFile: { name: '', size: Infinity },
-      timeouts: 0,
-      retries: 0
-    };
-    
-    // Ultra-aggressive progress throttling for maximum performance
-    let lastProgressUpdate = 0;
-    const PROGRESS_THROTTLE = 100; // Reduced to 100ms for better responsiveness
-    
-    function sendProgressUpdate(current, total, status) {
-      const now = Date.now();
-      if (now - lastProgressUpdate >= PROGRESS_THROTTLE || current === 0 || current === total) {
-        lastProgressUpdate = now;
-        chrome.runtime.sendMessage({
-          action: 'progressUpdate',
-          downloadId: downloadId,
-          current: current,
-          total: total,
-          status: status
-        });
-      }
-    }
-    
-    // Try Web Worker approach first for maximum performance
-    streamingZip = new StreamingZipCreator(downloadId, filename);
-    if (streamingZip.worker) {
-      console.log("[Offscreen] Using Web Worker for ultra-fast ZIP creation");
-      
-      // Pre-process files and start downloading immediately
-      sendProgressUpdate(0, files.length, 'Initializing ultra-fast processing...');
-        let completedFiles = 0;
-      const downloadPromises = files.map(async (file, index) => {
-        const startTime = performance.now();        try {
-          // Use enhanced download function with comprehensive logging
-          const downloadResult = await downloadFileWithTimeout(file);
-            if (downloadResult.success && downloadResult.blob && downloadResult.blob.size > 0) {
-            // Update session statistics
-            sessionStats.successCount++;
-            sessionStats.totalDownloadTime += downloadResult.downloadTime;
-            sessionStats.totalDownloadSize += downloadResult.actualSize;
-            
-            if (downloadResult.actualSize > sessionStats.largestFile.size) {
-              sessionStats.largestFile = { name: file.name, size: downloadResult.actualSize };
-            }
-            if (downloadResult.actualSize < sessionStats.smallestFile.size) {
-              sessionStats.smallestFile = { name: file.name, size: downloadResult.actualSize };
-            }            // Optimize filename - ensure proper extension is preserved
-            let finalFilename = cleanAndFixFilename(file.name, downloadResult.mimeType, file.isHtmlFile);
-            if (file.isHtmlFile && !finalFilename.toLowerCase().endsWith('.html')) {
-              finalFilename = finalFilename.replace(/\.[^.]*$/, '') + '.html';
-            }
-            
-            // Add to streaming ZIP only if blob is valid
-            await streamingZip.addFile(file.pathInZip || finalFilename, downloadResult.blob);
-            
-            completedFiles++;
-            sendProgressUpdate(completedFiles, files.length, 
-              `Downloaded: ${finalFilename} (${completedFiles}/${files.length})`);
-          } else {
-            throw new Error(downloadResult.error || 'Download failed or returned empty file');
-          }
-        } catch (error) {
-          console.error(`[Offscreen] ❌ Error downloading ${file.name}:`, error);
-          console.error(`[Offscreen] 📋 Error context:`, {
-            url: file.url.substring(0, 100) + '...',
-            estimatedSize: `${(file.estimatedSize / 1024 / 1024).toFixed(2)}MB`,
-            isHtml: file.isHtmlFile,
-            duration: `${((performance.now() - startTime) / 1000).toFixed(1)}s`
-          });
-            // Try alternative approaches for failed downloads
-          let retrySuccessful = false;
-          sessionStats.errorCount++;
-          
-          // If this is an HTML file with alternative URLs, try them
-          if (file.isHtmlFile && file.alternativeUrls && file.alternativeUrls.length > 0) {
-            for (const altUrl of file.alternativeUrls) {
-              try {
-                console.log(`[Offscreen] 🔄 Retrying with alternative URL: ${altUrl}`);
-                
-                // Create a copy of the file object with the alternative URL
-                const altFile = { ...file, url: altUrl };
-                const retryTimeout = Math.min(performanceTracker.getOptimalTimeout(true, file.estimatedSize) * 0.5, 600000); // 50% of optimal or max 10min
-                
-                const retryResult = await downloadFileWithTimeout(altFile, { timeout: retryTimeout });                if (retryResult.success && retryResult.blob && retryResult.blob.size > 0) {
-                  let finalFilename = cleanAndFixFilename(file.name, retryResult.mimeType, file.isHtmlFile);
-                  if (!finalFilename.toLowerCase().endsWith('.html')) {
-                    finalFilename = finalFilename.replace(/\.[^.]*$/, '') + '.html';
-                  }
-                  
-                  await streamingZip.addFile(file.pathInZip || finalFilename, retryResult.blob);
-                  retrySuccessful = true;
-                  sessionStats.successCount++;
-                  sessionStats.retries++;
-                  console.log(`[Offscreen] ✅ Successfully downloaded ${file.name} using alternative URL`);
-                  break;
-                }
-              } catch (retryError) {
-                console.warn(`[Offscreen] Alternative URL also failed for ${file.name}:`, retryError);
-                continue;
-              }
-            }
-          }
-            // If no retry worked, create an error file
-          if (!retrySuccessful) {
-            try {
-              const errorMessage = `Failed to download ${file.name}
-Error: ${error.message || 'Unknown error'}
-File Type: ${file.isHtmlFile ? 'HTML' : 'Regular'}
-URL: ${file.url}
-Estimated Size: ${(file.estimatedSize / 1024 / 1024).toFixed(2)}MB
-Timestamp: ${new Date().toISOString()}`;
-              
-              await streamingZip.addFile(
-                (file.pathInZip || file.name) + ".error.txt", 
-                new Blob([errorMessage], { type: 'text/plain' })
-              );
-            } catch (errorFileError) {
-              console.error(`[Offscreen] Could not even create error file for ${file.name}:`, errorFileError);
-            }
-          }
-          
-          completedFiles++;
-          sendProgressUpdate(completedFiles, files.length, 
-            retrySuccessful 
-              ? `Downloaded: ${file.name} (retry) (${completedFiles}/${files.length})`
-              : `Error: ${file.name} (${completedFiles}/${files.length})`);
-        }
-      });
-      
-      // Wait for all downloads to complete
-      await Promise.all(downloadPromises);
-      
-      // Generate and download ZIP using Web Worker
-      streamingZip.totalFiles = files.length;
-      await streamingZip.generateZip();
-      
-      return; // Exit early if Web Worker approach succeeds
-    }
-    
-    // Fallback to optimized main thread approach
-    console.log("[Offscreen] Using main thread with advanced optimizations");
-    
-    // Send initial progress update for indexing phase
-    sendProgressUpdate(0, files.length, 'Starting indexing...');
-    
+  try {
+    console.log("[Offscreen] Starting ZIP creation with", files.length, "files");
+
     const zip = new JSZip();
-    
-    // Pre-process file information with optimized operations and memory estimation
-    const processedFiles = files.map(file => {
-      const pathParts = file.pathInZip.split('/');
-      const originalFilename = pathParts.pop();
-      const folderPath = pathParts.length > 0 ? cachedPathJoin(pathParts) + '/' : '';      // Enhanced file size estimation based on URL patterns and file types
-      let estimatedSize = 1000000; // Default 1MB estimate (increased from 500KB)
-      let sizeCategory = 'default';
-      const lowerUrl = file.url.toLowerCase();
-      const lowerName = originalFilename.toLowerCase();
-      
-      // Image files
-      if (lowerUrl.includes('image') || lowerName.includes('.jpg') || lowerName.includes('.jpeg') || 
-          lowerName.includes('.png') || lowerName.includes('.gif') || lowerName.includes('.svg')) {
-        estimatedSize = 3000000; // 3MB for images
-        sizeCategory = 'image';
-      } 
-      // Video files - much larger
-      else if (lowerUrl.includes('video') || lowerName.includes('.mp4') || lowerName.includes('.avi') || 
-               lowerName.includes('.mov') || lowerName.includes('.wmv') || lowerName.includes('.flv')) {
-        estimatedSize = 50000000; // 50MB for videos
-        sizeCategory = 'video';
-      }
-      // PowerPoint files - can be very large (up to 287MB observed)
-      else if (lowerName.includes('.ppt') || lowerName.includes('.pptx')) {
-        estimatedSize = 300000000; // 300MB estimate for PowerPoint files (conservative for 287MB max observed)
-        sizeCategory = 'powerpoint';
-      } 
-      // PDF documents
-      else if (lowerName.includes('.pdf')) {
-        estimatedSize = 5000000; // 5MB for PDFs
-        sizeCategory = 'pdf';
-      } 
-      // Word documents
-      else if (lowerName.includes('.doc') || lowerName.includes('.docx')) {
-        estimatedSize = 2000000; // 2MB for Word docs
-        sizeCategory = 'word';
-      } 
-      // Excel files
-      else if (lowerName.includes('.xls') || lowerName.includes('.xlsx')) {
-        estimatedSize = 3000000; // 3MB for Excel files
-        sizeCategory = 'excel';
-      } 
-      // Archive files
-      else if (lowerName.includes('.zip') || lowerName.includes('.rar') || lowerName.includes('.7z')) {
-        estimatedSize = 20000000; // 20MB for archives
-        sizeCategory = 'archive';
-      }
-      // HTML files (can be large with embedded content)
-      else if (lowerName.includes('.html') || lowerName.includes('.htm') || file.isHtmlFile) {
-        estimatedSize = 5000000; // 5MB for HTML files
-        sizeCategory = 'html';
-      }
-        // Enhanced logging for file size estimation
-      console.log(`[Offscreen] 📏 File size estimated: ${originalFilename}`, {
-        category: sizeCategory,
-        estimatedSize: `${(estimatedSize / 1024 / 1024).toFixed(2)}MB`,
-        url: file.url.substring(0, 80) + (file.url.length > 80 ? '...' : ''),
-        isHtml: file.isHtmlFile || false
-      });
-      
-      return {
-        ...file,
-        originalFilename,
-        folderPath,
-        hasExtension: hasFileExtension(originalFilename),
-        isHtmlFile: file.isHtmlFile || false,
-        alternativeUrls: file.alternativeUrls || [],
-        estimatedSize: Math.max(100000, estimatedSize), // Ensure minimum 100KB estimate
-        sizeCategory
-      };
-    });
-      // Send indexing complete message
-    sendProgressUpdate(0, files.length, `Found ${files.length} files to download`);
-      // Enhanced logging for total file analysis
-    const totalEstimatedSize = files.reduce((sum, file) => {
-      const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-      return sum + fileSize;
-    }, 0);
-    const categoryCounts = files.reduce((counts, file) => {
-      counts[file.sizeCategory] = (counts[file.sizeCategory] || 0) + 1;
-      return counts;
-    }, {});
-    
-    console.log(`[Offscreen] 📊 Download summary prepared:`, {
-      totalFiles: files.length,
-      totalEstimatedSize: `${(totalEstimatedSize / 1024 / 1024).toFixed(2)}MB`,
-      categoryCounts,
-      connectionQuality: performanceTracker.connectionQuality.toFixed(2),
-      networkType: performanceTracker.networkType
-    });
-    
-    // Minimal delay for UI responsiveness
-    await new Promise(resolve => setTimeout(resolve, 50)); // Reduced from 200ms
-    
-    // Optimized batch processing with intelligent sizing and performance prediction
-    let currentBatchSize = 3; // Start with conservative size
-    const performanceMetrics = {
-      avgDownloadTime: 1000, // Track average download time per file
-      connectionQuality: 1.0  // Track connection quality (1.0 = excellent, 0.5 = poor)
-    };
-      for (let i = 0; i < processedFiles.length; i += currentBatchSize) {
-      const batchStartTime = performance.now();
-      const batch = processedFiles.slice(i, Math.min(i + currentBatchSize, processedFiles.length));
-      
-      // Enhanced batch logging
-      enhancedLogger.logBatchInfo(batch, Math.floor(i / currentBatchSize), Math.ceil(processedFiles.length / currentBatchSize));
-        // Estimate batch complexity and adjust size for next iteration
-      const totalBatchSize = batch.reduce((sum, file) => {
-        const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-        return sum + fileSize;
-      }, 0);
-      
-      console.log(`[Offscreen] 📦 Batch analysis:`, {
-        batchNumber: Math.floor(i / currentBatchSize) + 1,
-        currentBatchSize,
-        totalBatchSize: `${(totalBatchSize / 1024 / 1024).toFixed(2)}MB`,
-        connectionQuality: performanceTracker.connectionQuality.toFixed(2)
-      });
-      
-      // Adaptive batch sizing: smaller batches for larger files
-      if (totalBatchSize > 10000000) { // > 10MB total
-        currentBatchSize = Math.max(1, currentBatchSize - 1);
-        console.log(`[Offscreen] 📉 Reducing batch size to ${currentBatchSize} due to large total size`);
-      } else if (totalBatchSize < 2000000) { // < 2MB total
-        currentBatchSize = Math.min(4, currentBatchSize + 1); // Allow up to 4 files for small batches
-        console.log(`[Offscreen] 📈 Increasing batch size to ${currentBatchSize} due to small total size`);
-      }
-      
-      // Process batch with Promise.allSettled for better error handling
-      const batchPromises = batch.map(async (file, batchIndex) => {
-        const globalIndex = i + batchIndex;        try {
-          const fileStartTime = performance.now();
-          console.log(`[Offscreen] 📥 Downloading file ${globalIndex + 1}/${processedFiles.length}: ${file.name}`);
-          
-          // Send progress update (throttled)
-          sendProgressUpdate(globalIndex + 1, processedFiles.length, 
-            `Downloading: ${file.name} (${globalIndex + 1}/${processedFiles.length})`);
-          
-          // Use enhanced download function with comprehensive logging
-          const downloadResult = await downloadFileWithTimeout(file);
-            if (downloadResult.success && downloadResult.blob && downloadResult.blob.size > 0) {
-            const blob = downloadResult.blob;
-            const fileDownloadTime = downloadResult.downloadTime;
-              // Use enhanced filename cleaning function
-            let bestFilename = file.originalFilename;
-            
-            if (file.isHtmlFile) {
-              // Ensure HTML files have .html extension
-              if (!cachedToLowerCase(bestFilename).endsWith('.html')) {
-                bestFilename = bestFilename.replace(/\.[^.]*$/, '') + '.html';
-              }
-              
-              // Quick HTML validation for small files only (optimized)
-              if (blob.size < 524288) { // Only validate files under 512KB for speed
-                try {
-                  const text = await blob.text();
-                  const isValidHtml = QUICK_HTML_CHECK_REGEX.test(text); // Use optimized regex
-                  if (!isValidHtml) {
-                    console.warn(`[Offscreen] HTML file may not contain valid HTML content: ${bestFilename}`);
-                  }
-                } catch (textError) {
-                  console.warn(`[Offscreen] Could not validate HTML content for: ${bestFilename}`);
-                }
-              }
-            } else if (!file.hasExtension) {
-              // For downloads that don't have extensions, we'd need the response headers
-              // Since downloadFileWithTimeout doesn't return them, we'll use the original filename
-              bestFilename = file.originalFilename || file.name;
-            }
-              // Apply comprehensive filename cleaning to handle .download suffix and missing extensions
-            bestFilename = cleanAndFixFilename(bestFilename, downloadResult.mimeType, file.isHtmlFile);
-            
-            const finalFileName = file.folderPath + cleanFilesystemPath(bestFilename);
-            zip.file(finalFileName, blob);
-            
-            console.log(`[Offscreen] Added ${file.name} to ZIP as "${finalFileName}"`);
-            
-            // Update session statistics
-            sessionStats.successCount++;
-            sessionStats.totalDownloadTime += fileDownloadTime;
-            sessionStats.totalDownloadSize += blob.size;
-            
-            if (blob.size > sessionStats.largestFile.size) {
-              sessionStats.largestFile = { name: file.name, size: blob.size };
-            }
-            if (blob.size < sessionStats.smallestFile.size) {
-              sessionStats.smallestFile = { name: file.name, size: blob.size };
-            }} else {
-            // Handle download failure
-            sessionStats.errorCount++;
-            console.error(`[Offscreen] Error downloading ${file.name}:`, downloadResult.error);
-            zip.file(file.pathInZip + ".error.txt", 
-              `Failed to download ${file.name}: ${downloadResult.error}`);
-          }
-        } catch (error) {          // Handle any unexpected errors
-          sessionStats.errorCount++;
-          console.error(`[Offscreen] Unexpected error downloading ${file.name}:`, error);
-          
-          // Create comprehensive error file with more details
-          const errorMessage = `Failed to download ${file.name}
-Error: ${error.message || 'Unknown error'}
-File Type: ${file.isHtmlFile ? 'HTML' : 'Regular'}
-URL: ${file.url}
-Estimated Size: ${(file.estimatedSize / 1024 / 1024).toFixed(2)}MB
-Timestamp: ${new Date().toISOString()}`;
-          
-          zip.file(file.folderPath + cleanFilesystemPath(file.originalFilename) + ".error.txt", errorMessage);
+    let completedFiles = 0;
+
+    // Throttled progress update function
+    let lastProgressUpdate = 0;
+    const PROGRESS_THROTTLE = 100; // ms
+
+    function sendProgressUpdate(current, total, status) {
+        const now = Date.now();
+        if (now - lastProgressUpdate >= PROGRESS_THROTTLE || current === 0 || current === total) {
+            lastProgressUpdate = now;
+            chrome.runtime.sendMessage({
+                action: 'progressUpdate',
+                downloadId: downloadId,
+                current: current,
+                total: total,
+                status: status
+            });
         }
-      });
-      
-      // Wait for current batch with better error handling
-      const results = await Promise.allSettled(batchPromises);
-      
-      // Log any failures for debugging
-      results.forEach((result, index) => {
-        if (result.status === 'rejected') {
-          console.warn(`[Offscreen] Batch item ${index} failed:`, result.reason);
-        }
-      });
-      
-      // Update performance metrics for adaptive batching
-      const batchEndTime = performance.now();
-      const batchTime = batchEndTime - batchStartTime;
-      performanceMetrics.avgDownloadTime = (performanceMetrics.avgDownloadTime + batchTime) / 2;
-      
-      // Adjust connection quality based on performance
-      if (batchTime > 5000) { // > 5 seconds for batch
-        performanceMetrics.connectionQuality = Math.max(0.5, performanceMetrics.connectionQuality - 0.1);
-      } else if (batchTime < 2000) { // < 2 seconds for batch
-        performanceMetrics.connectionQuality = Math.min(1.0, performanceMetrics.connectionQuality + 0.1);
-      }
     }
-    
-    // Optimized ZIP generation with fastest settings
-    console.log("[Offscreen] Generating ZIP file...");
-    sendProgressUpdate(processedFiles.length, processedFiles.length, 'Creating ZIP archive...');
-    
-    const zipBlob = await zip.generateAsync({ 
-      type: "blob",
-      compression: "STORE" // No compression for maximum speed (was DEFLATE level 1)
-    });
-    
-    // Immediate download initiation
-    console.log("[Offscreen] Initiating ZIP download...");
-    sendProgressUpdate(processedFiles.length, processedFiles.length, 'Preparing ZIP download...');
-    
-    const downloadUrl = URL.createObjectURL(zipBlob);
-    const anchor = document.createElement('a');
-    anchor.href = downloadUrl;
-    anchor.download = cleanFilesystemPath(filename) || 'smartschool_files.zip';
-      // Log comprehensive session summary before initiating download
-    const sessionEndTime = performance.now();
-    const totalSessionDuration = sessionEndTime - sessionStats.startTime;
-    
-    enhancedLogger.logDownloadSummary(
-      sessionStats.totalFiles,
-      sessionStats.successCount,
-      sessionStats.errorCount,
-      totalSessionDuration,
-      sessionStats.totalDownloadSize
-    );
-    
-    // Force immediate download
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    
-    // Quick status update for user feedback
-    setTimeout(() => {
-      sendProgressUpdate(processedFiles.length, processedFiles.length, 'ZIP download initiated - check your browser downloads');
-      console.log("[Offscreen] ZIP download triggered");
-    }, 200); // Reduced delay for faster feedback
-    
-    // Faster cleanup for better performance
-    setTimeout(() => {
+
+    sendProgressUpdate(0, files.length, `Starting download of ${files.length} files...`);
+
+    for (const file of files) {
+      const fullPath = file.pathInZip || file.name;
       try {
-        URL.revokeObjectURL(downloadUrl);
-        sendProgressUpdate(processedFiles.length, processedFiles.length, 'Download ready');
-        console.log("[Offscreen] ZIP download completed, resources cleaned up");
+        // Fetch the file content
+        const response = await fetch(file.url); 
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        
+        // Add the file to the zip. The filename and path are prepared by the background script.
+        zip.file(fullPath, blob);
+
+        completedFiles++;
+        sendProgressUpdate(completedFiles, files.length, `Downloaded: ${file.name}`);
+
       } catch (error) {
-        console.warn("[Offscreen] Error revoking blob URL:", error);
+        console.error(`[Offscreen] Error downloading ${file.name} from ${file.url}:`, error);
+        
+        // If a download fails, add a text file with the error details to the ZIP
+        const errorMessage = `Failed to download file: ${file.name}\nURL: ${file.url}\nError: ${error.message}`;
+        const errorFileName = fullPath + ".error.txt";
+        zip.file(errorFileName, errorMessage);
+
+        completedFiles++; // Also count error files as "completed" for the progress bar
+        sendProgressUpdate(completedFiles, files.length, `Error: ${file.name}`);
       }
-    }, 6000); // Reduced from 8 seconds to 6 seconds
-    
-  } catch (error) {
-    console.error("[Offscreen] Error during ZIP creation/download:", error);
-    
-    // Clean up any pending resources
-    try {
-      if (typeof downloadUrl !== 'undefined') {
-        URL.revokeObjectURL(downloadUrl);
-      }
-    } catch (cleanupError) {
-      console.warn("[Offscreen] Error during cleanup:", cleanupError);
     }
-    
-    // Send error message
+
+    sendProgressUpdate(0, 100, 'Creating ZIP file...');
+
+    // Generate the ZIP file blob
+    const zipBlob = await zip.generateAsync({
+      type: "blob",
+      compression: "DEFLATE",
+      compressionOptions: {
+        level: 6 // A good balance between speed and file size
+      }
+    }, (metadata) => {
+      // Update progress on the zipping process itself
+      if (metadata.percent) {
+        const percent = Math.round(metadata.percent);
+        // Here, we use the percentage as the 'current' value and 100 as 'total'
+        sendProgressUpdate(percent, 100, `Compressing... ${percent}%`);
+      }
+    });
+
+    // Create a temporary URL for the generated ZIP blob
+    const url = URL.createObjectURL(zipBlob);
+
+    // Send the URL to the background script to handle the final download
+    chrome.runtime.sendMessage({
+      action: 'downloadZipFromUrl',
+      downloadId: downloadId,
+      url: url,
+      filename: filename
+    });
+
+    console.log("[Offscreen] ZIP file created and sent to background script for download.");
+
+  } catch (error) {
+    console.error("[Offscreen] A critical error occurred during ZIP creation:", error);
+    // Notify the UI of the failure
     chrome.runtime.sendMessage({
       action: 'progressUpdate',
       downloadId: downloadId,
-      current: 0,
-      total: 0,
-      status: 'Download failed: ' + error.message
+      current: files.length,
+      total: files.length,
+      error: `ZIP creation failed: ${error.message}`
     });
   }
 }
@@ -995,741 +696,3 @@ const preWarmConnections = (() => {
 const requestCache = new Map();
 const pendingRequests = new Map();
 
-
-// Enhanced fetch with intelligent caching and deduplication
-async function enhancedFetch(url, options = {}) {
-  // Pre-warm connection on first request
-  preWarmConnections(url);
-  
-  // Check if request is already pending
-  if (pendingRequests.has(url)) {
-    return await pendingRequests.get(url);
-  }
-  
-  // Check cache first (with TTL)
-  if (requestCache.has(url)) {
-    const cached = requestCache.get(url);
-    if (Date.now() - cached.timestamp < 300000) { // 5 minute TTL
-      return cached.response.clone();
-    } else {
-      requestCache.delete(url);
-    }
-  }
-  
-  // Create fetch with enhanced options
-  const enhancedOptions = {
-    ...options,
-    headers: {
-      'Accept': '*/*',
-      'Cache-Control': 'max-age=300',
-      ...options.headers
-    },
-    keepalive: true,
-    priority: 'high'
-  };
-  
-  // Create and cache the promise
-  const requestPromise = fetch(url, enhancedOptions)
-    .then(response => {
-      // Cache successful responses
-      if (response.ok && response.status === 200) {
-        requestCache.set(url, {
-          response: response.clone(),
-          timestamp: Date.now()
-        });
-      }
-      pendingRequests.delete(url);
-      return response;
-    })
-    .catch(error => {
-      pendingRequests.delete(url);
-      throw error;
-    });
-  
-  pendingRequests.set(url, requestPromise);
-  return await requestPromise;
-}
-
-// Web Worker implementation for CPU-intensive ZIP operations
-function createZipWorker() {
-  // Disable Web Worker due to CSP constraints in Chrome extensions
-  // The CSP policy prevents loading external scripts via importScripts()
-  console.warn('[Offscreen] Web Worker disabled due to CSP constraints - falling back to main thread');
-  return null;
-}
-
-// Streaming ZIP creation class for maximum performance
-class StreamingZipCreator {
-  constructor(downloadId, filename) {
-    this.downloadId = downloadId;
-    this.filename = filename;
-    this.worker = createZipWorker();
-    this.fileQueue = [];
-    this.totalFiles = 0;
-    this.isReady = false;
-    this.setupWorker();
-  }
-  
-  setupWorker() {
-    if (!this.worker) {
-      console.warn('[Offscreen] Worker not available, falling back to main thread');
-      return;
-    }
-    
-    this.worker.onmessage = (e) => {
-      const { action, current, total, blob, message } = e.data;
-      
-      switch(action) {
-        case 'ready':
-          this.isReady = true;
-          this.processQueue();
-          break;
-        case 'progress':
-          this.sendProgressUpdate(current, total, `Processing files (${current}/${total})...`);
-          break;
-        case 'complete':
-          this.onZipComplete(blob);
-          break;
-        case 'error':
-          console.error('[Offscreen] Worker error:', message);
-          this.fallbackToMainThread();
-          break;
-      }
-    };
-    
-    this.worker.onerror = (error) => {
-      console.error('[Offscreen] Worker error:', error);
-      this.fallbackToMainThread();
-    };
-  }
-  
-  async addFile(filename, blob) {
-    this.fileQueue.push({ filename, blob });
-    
-    if (this.worker && this.isReady) {
-      this.processQueue();
-    }
-  }
-  
-  processQueue() {
-    if (!this.worker || this.fileQueue.length === 0) return;
-    
-    // Process all queued files
-    while (this.fileQueue.length > 0) {
-      const file = this.fileQueue.shift();
-      this.worker.postMessage({ 
-        action: 'addFile', 
-        data: file 
-      });
-    }
-  }
-  
-  async generate() {
-    if (this.worker) {
-      this.worker.postMessage({ 
-        action: 'init', 
-        data: { totalFiles: this.totalFiles } 
-      });
-    } else {
-      this.fallbackToMainThread();
-    }
-  }
-  
-  async generateZip() {
-    if (this.worker) {
-      this.worker.postMessage({ action: 'generate' });
-    }
-  }
-  
-  onZipComplete(blob) {
-    this.downloadZip(blob);
-    this.cleanup();
-  }
-  
-  downloadZip(blob) {
-    const downloadUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = downloadUrl;
-    anchor.download = cleanFilesystemPath(this.filename) || 'smartschool_files.zip';
-    
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    
-    this.sendProgressUpdate(1, 1, 'ZIP download initiated - check your browser downloads');
-    
-    setTimeout(() => {
-      URL.revokeObjectURL(downloadUrl);
-      this.sendProgressUpdate(1, 1, 'Download ready');
-    }, 3000);
-  }
-  
-  async fallbackToMainThread() {
-    console.log('[Offscreen] Falling back to main thread ZIP creation');
-    // Fallback to original ZIP creation method
-    this.cleanup();
-    // Will be handled by the original createAndDownloadZip function
-  }
-  
-  sendProgressUpdate(current, total, status) {
-    chrome.runtime.sendMessage({
-      action: 'progressUpdate',
-      downloadId: this.downloadId,
-      current: current,
-      total: total,
-      status: status
-    });
-  }
-  
-  cleanup() {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-  }
-}
-
-// Enhanced logging utilities for file size and timeout tracking
-const enhancedLogger = {  logFileDownloadStart(file, timeout) {
-    const estimatedMB = (file.estimatedSize / 1024 / 1024).toFixed(2);
-    const timeoutMin = (timeout / 1000 / 60).toFixed(1);
-    const timeoutSec = (timeout / 1000).toFixed(1);
-    
-    console.log(`[Offscreen] 📥 Starting download: ${file.name}`);
-    console.log(`[Offscreen] 📊 File details:`, {
-      fileName: file.name,
-      url: file.url.substring(0, 100) + (file.url.length > 100 ? '...' : ''),
-      estimatedSize: `${estimatedMB}MB (${file.estimatedSize} bytes)`,
-      sizeCategory: file.sizeCategory || 'unknown',
-      isHtml: file.isHtmlFile,
-      hasAlternativeUrls: file.alternativeUrls?.length > 0,
-      alternativeUrlCount: file.alternativeUrls?.length || 0,
-      timeout: `${timeoutMin}min (${timeoutSec}s / ${timeout}ms)`,
-      connectionQuality: performanceTracker.connectionQuality.toFixed(2),
-      networkType: performanceTracker.networkType,
-      avgDownloadTime: `${(performanceTracker.downloadTimes.reduce((a, b) => a + b, 0) / Math.max(1, performanceTracker.downloadTimes.length) / 1000).toFixed(1)}s`,
-      pathInZip: file.pathInZip || 'root'
-    });
-
-    // Log size-based timeout reasoning
-    if (file.estimatedSize > 200000000) {
-      console.log(`[Offscreen] 🔍 Timeout reasoning: Ultra-large file (${estimatedMB}MB) - using maximum timeout of ${timeoutMin}min`);
-    } else if (file.estimatedSize > 50000000) {
-      console.log(`[Offscreen] 🔍 Timeout reasoning: Large file (${estimatedMB}MB) - extended timeout of ${timeoutMin}min`);
-    } else if (file.estimatedSize > 10000000) {
-      console.log(`[Offscreen] 🔍 Timeout reasoning: Medium-large file (${estimatedMB}MB) - moderate timeout of ${timeoutMin}min`);
-    } else {
-      console.log(`[Offscreen] 🔍 Timeout reasoning: Small-medium file (${estimatedMB}MB) - standard timeout of ${timeoutMin}min`);
-    }
-  },
-  logFileDownloadComplete(file, blob, duration, timeout) {
-    const estimatedMB = (file.estimatedSize / 1024 / 1024).toFixed(2);
-    const actualMB = (blob.size / 1024 / 1024).toFixed(2);
-    const durationSec = (duration / 1000).toFixed(1);
-    const timeoutMin = (timeout / 1000 / 60).toFixed(1);
-    const timeoutSec = (timeout / 1000).toFixed(1);
-    const sizeAccuracy = ((blob.size / file.estimatedSize) * 100).toFixed(1);
-    const speed = ((blob.size / 1024 / 1024) / (duration / 1000)).toFixed(2);
-    const sizeDifference = (blob.size - file.estimatedSize) / 1024 / 1024;
-    const timeoutUtilization = ((duration / timeout) * 100).toFixed(1);
-    
-    console.log(`[Offscreen] ✅ Download completed: ${file.name}`);
-    console.log(`[Offscreen] 📈 Performance metrics:`, {
-      fileName: file.name,
-      estimatedSize: `${estimatedMB}MB (${file.estimatedSize} bytes)`,
-      actualSize: `${actualMB}MB (${blob.size} bytes)`,
-      sizeDifference: `${sizeDifference > 0 ? '+' : ''}${sizeDifference.toFixed(2)}MB`,
-      sizeAccuracy: `${sizeAccuracy}%`,
-      duration: `${durationSec}s (${duration}ms)`,
-      timeoutUsed: `${timeoutMin}min (${timeoutSec}s / ${timeout}ms)`,
-      timeoutUtilization: `${timeoutUtilization}%`,
-      downloadSpeed: `${speed}MB/s`,
-      efficiency: duration < timeout * 0.5 ? 'Excellent' : duration < timeout * 0.8 ? 'Good' : 'Near timeout'
-    });
-
-    // Enhanced performance warnings with more granular feedback
-    if (blob.size > file.estimatedSize * 3) {
-      console.warn(`[Offscreen] ⚠️ File was ${(blob.size / file.estimatedSize).toFixed(1)}x larger than estimated! Consider updating size estimation algorithm.`);
-    } else if (blob.size > file.estimatedSize * 2) {
-      console.warn(`[Offscreen] ⚠️ File was ${(blob.size / file.estimatedSize).toFixed(1)}x larger than estimated! Size estimation may be conservative.`);
-    } else if (blob.size < file.estimatedSize * 0.3) {
-      console.warn(`[Offscreen] ⚠️ File was ${(file.estimatedSize / blob.size).toFixed(1)}x smaller than estimated! Size estimation may be too generous.`);
-    } else if (blob.size < file.estimatedSize * 0.5) {
-      console.warn(`[Offscreen] ⚠️ File was ${(file.estimatedSize / blob.size).toFixed(1)}x smaller than estimated! Size estimation could be improved.`);
-    }
-
-    // Timeout utilization warnings with suggestions
-    if (duration > timeout * 0.9) {
-      console.warn(`[Offscreen] 🚨 Download used ${timeoutUtilization}% of timeout - critically close to timeout! Consider increasing timeout for similar files.`);
-    } else if (duration > timeout * 0.8) {
-      console.warn(`[Offscreen] ⚠️ Download used ${timeoutUtilization}% of timeout - consider increasing timeout for better safety margin.`);
-    } else if (duration < timeout * 0.2) {
-      console.log(`[Offscreen] 💡 Download only used ${timeoutUtilization}% of timeout - timeout could potentially be reduced for similar files.`);
-    }
-
-    // Speed analysis
-    if (speed < 0.5) {
-      console.warn(`[Offscreen] 🐌 Slow download speed (${speed}MB/s) - network may be congested or file server is slow.`);
-    } else if (speed > 5) {
-      console.log(`[Offscreen] 🚀 Excellent download speed (${speed}MB/s) - great connection!`);
-    }
-  },
-  logTimeoutCalculation(isHtml, fileSize, timeout) {
-    const sizeMB = fileSize ? (fileSize / 1024 / 1024).toFixed(2) : 'unknown';
-    const sizeBytes = fileSize || 'unknown';
-    const timeoutMin = (timeout / 1000 / 60).toFixed(1);
-    const timeoutSec = (timeout / 1000).toFixed(1);
-    
-    console.log(`[Offscreen] ⏱️ Timeout calculation details:`, {
-      fileType: isHtml ? 'HTML' : 'Binary',
-      fileSize: `${sizeMB}MB (${sizeBytes} bytes)`,
-      connectionQuality: performanceTracker.connectionQuality.toFixed(2),
-      networkType: performanceTracker.networkType,
-      avgDownloadSpeed: performanceTracker.downloadTimes.length > 0 ? 
-        `${(performanceTracker.downloadTimes.reduce((a, b) => a + b, 0) / performanceTracker.downloadTimes.length / 1000).toFixed(1)}s avg` : 'no data',
-      calculatedTimeout: `${timeoutMin}min (${timeoutSec}s / ${timeout}ms)`
-    });
-
-    // Provide reasoning for timeout calculation
-    if (fileSize) {
-      if (fileSize > 200000000) {
-        console.log(`[Offscreen] 📋 Timeout reasoning: Ultra-massive file (${sizeMB}MB) requires maximum timeout for reliable downloads`);
-      } else if (fileSize > 50000000) {
-        console.log(`[Offscreen] 📋 Timeout reasoning: Large file (${sizeMB}MB) needs extended timeout for stability`);
-      } else if (fileSize > 10000000) {
-        console.log(`[Offscreen] 📋 Timeout reasoning: Medium file (${sizeMB}MB) using generous timeout for safety`);
-      } else {
-        console.log(`[Offscreen] 📋 Timeout reasoning: Small file (${sizeMB}MB) using standard timeout`);
-      }
-    } else {
-      console.log(`[Offscreen] 📋 Timeout reasoning: Unknown file size, using conservative default for ${isHtml ? 'HTML' : 'binary'} files`);
-    }
-
-    // Connection quality impact
-    if (performanceTracker.connectionQuality < 0.5) {
-      console.log(`[Offscreen] 🌐 Poor connection quality (${performanceTracker.connectionQuality.toFixed(2)}) - timeout increased for reliability`);
-    } else if (performanceTracker.connectionQuality > 0.8) {
-      console.log(`[Offscreen] 🌐 Good connection quality (${performanceTracker.connectionQuality.toFixed(2)}) - standard timeout used`);
-    }
-  },  logBatchInfo(batch, batchIndex, totalBatches) {
-    const totalSize = batch.reduce((sum, file) => {
-      const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-      return sum + fileSize;
-    }, 0);
-    const totalMB = (totalSize / 1024 / 1024).toFixed(2);
-    const avgFileSize = totalSize / batch.length;
-    const avgFileMB = (avgFileSize / 1024 / 1024).toFixed(2);
-    const largestFile = batch.reduce((largest, file) => {
-      const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-      const largestSize = Number.isFinite(largest.estimatedSize) ? largest.estimatedSize : 500000;
-      return fileSize > largestSize ? file : largest;
-    });
-    const smallestFile = batch.reduce((smallest, file) => {
-      const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-      const smallestSize = Number.isFinite(smallest.estimatedSize) ? smallest.estimatedSize : 500000;
-      return fileSize < smallestSize ? file : smallest;
-    });
-    
-    console.log(`[Offscreen] 📦 Processing batch ${batchIndex + 1}/${totalBatches}:`, {
-      fileCount: batch.length,
-      estimatedTotalSize: `${totalMB}MB (${totalSize} bytes)`,
-      avgFileSize: `${avgFileMB}MB (${avgFileSize.toFixed(0)} bytes)`,      largestFile: {
-        name: largestFile.name,
-        size: `${((Number.isFinite(largestFile.estimatedSize) ? largestFile.estimatedSize : 500000) / 1024 / 1024).toFixed(2)}MB`
-      },
-      smallestFile: {
-        name: smallestFile.name,
-        size: `${((Number.isFinite(smallestFile.estimatedSize) ? smallestFile.estimatedSize : 500000) / 1024 / 1024).toFixed(2)}MB`
-      },
-      htmlFiles: batch.filter(f => f.isHtmlFile).length,
-      binaryFiles: batch.filter(f => !f.isHtmlFile).length,
-      filesWithAlternatives: batch.filter(f => f.alternativeUrls?.length > 0).length
-    });
-      // Log individual files in the batch for detailed tracking
-    console.log(`[Offscreen] 📋 Batch ${batchIndex + 1} files:`, 
-      batch.map(f => ({
-        name: f.name,
-        size: `${((Number.isFinite(f.estimatedSize) ? f.estimatedSize : 500000) / 1024 / 1024).toFixed(2)}MB`,
-        type: f.isHtmlFile ? 'HTML' : 'Binary',
-        alternatives: f.alternativeUrls?.length || 0
-      }))
-    );    // Batch complexity analysis
-    const complexityScore = batch.reduce((score, file) => {
-      let fileScore = 1;
-      const fileSize = Number.isFinite(file.estimatedSize) ? file.estimatedSize : 500000;
-      
-      if (fileSize > 50000000) fileScore += 3; // Large files add complexity
-      else if (fileSize > 10000000) fileScore += 2;
-      else if (fileSize > 1000000) fileScore += 1;
-      
-      if (file.isHtmlFile) fileScore += 1; // HTML files might need processing
-      if (file.alternativeUrls?.length > 0) fileScore += 1; // Alternative URLs add complexity
-      
-      return score + fileScore;
-    }, 0);
-
-    console.log(`[Offscreen] 🧮 Batch complexity analysis:`, {
-      complexityScore,
-      averageComplexityPerFile: (complexityScore / batch.length).toFixed(1),
-      estimatedProcessingTime: `${(complexityScore * 2).toFixed(0)}s`,
-      riskLevel: complexityScore > batch.length * 4 ? 'High' : 
-                 complexityScore > batch.length * 2 ? 'Medium' : 'Low'
-    });
-  },
-
-  logDownloadSummary(totalFiles, successCount, errorCount, totalDuration, totalSize) {
-    const successRate = ((successCount / totalFiles) * 100).toFixed(1);
-    const errorRate = ((errorCount / totalFiles) * 100).toFixed(1);
-    const avgDuration = totalDuration / successCount;
-    const totalMB = (totalSize / 1024 / 1024).toFixed(2);
-    const overallSpeed = totalSize / totalDuration * 1000; // bytes per second
-    const overallSpeedMBps = (overallSpeed / 1024 / 1024).toFixed(2);
-
-    console.log(`[Offscreen] 📊 Download Session Summary:`, {
-      totalFiles,
-      successfulDownloads: successCount,
-      failedDownloads: errorCount,
-      successRate: `${successRate}%`,
-      errorRate: `${errorRate}%`,
-      totalSize: `${totalMB}MB (${totalSize} bytes)`,
-      totalDuration: `${(totalDuration / 1000).toFixed(1)}s`,
-      avgDurationPerFile: `${(avgDuration / 1000).toFixed(1)}s`,
-      overallSpeed: `${overallSpeedMBps}MB/s`,
-      performance: successRate > 95 ? 'Excellent' : 
-                   successRate > 85 ? 'Good' : 
-                   successRate > 70 ? 'Fair' : 'Poor'
-    });
-
-    // Performance recommendations
-    if (errorRate > 15) {
-      console.warn(`[Offscreen] 💡 High error rate (${errorRate}%) - consider increasing timeouts or checking network stability`);
-    }
-    if (parseFloat(overallSpeedMBps) < 1) {
-      console.warn(`[Offscreen] 💡 Slow overall speed (${overallSpeedMBps}MB/s) - network may be congested`);
-    }
-    if (avgDuration > 10000) {
-      console.warn(`[Offscreen] 💡 Long average download time (${(avgDuration/1000).toFixed(1)}s) - consider smaller batch sizes`);
-    }
-  }
-};
-
-// Enhanced download function with comprehensive timeout and size tracking
-async function downloadFileWithTimeout(file, options = {}) {
-  const startTime = performance.now();
-  let timeoutId;
-  let controller;
-  
-  try {
-    // Calculate optimal timeout based on file size and connection quality
-    const optimalTimeout = performanceTracker.getOptimalTimeout(file.isHtmlFile, file.estimatedSize);
-    const actualTimeout = options.timeout || optimalTimeout;
-    
-    // Enhanced logging for download start
-    enhancedLogger.logFileDownloadStart(file, actualTimeout);
-    
-    // Set up abort controller and timeout
-    controller = new AbortController();
-    timeoutId = setTimeout(() => {
-      const durationSoFar = performance.now() - startTime;
-      console.warn(`[Offscreen] ⏰ downloadFileWithTimeout: Timeout reached for ${file.name} after ${(durationSoFar/1000).toFixed(1)}s (limit: ${(actualTimeout/1000/60).toFixed(1)}min)`);
-      controller.abort();
-    }, actualTimeout);
-    
-    // Try primary URL first
-    let response;
-    let finalUrl = file.url;
-    
-    try {
-      // Perform the download with enhanced fetch
-      response = await enhancedFetch(file.url, {
-        signal: controller.signal,
-        keepalive: true,
-        headers: {
-          'Accept': '*/*',
-          'Cache-Control': 'no-cache'
-        },
-        ...options.fetchOptions
-      });
-      
-      if (!response.ok && file.isHtmlFile && file.alternativeUrls && file.alternativeUrls.length > 0) {
-        // Try alternative URLs for HTML files
-        console.log(`[Offscreen] 🔄 Primary URL failed (${response.status}), trying alternative URLs for ${file.name}`);
-        
-        for (let i = 0; i < file.alternativeUrls.length; i++) {
-          const altUrl = file.alternativeUrls[i];
-          try {
-            console.log(`[Offscreen] 🔄 Trying alternative URL ${i + 1}/${file.alternativeUrls.length}: ${altUrl.substring(0, 100)}...`);
-            
-            response = await enhancedFetch(altUrl, {
-              signal: controller.signal,
-              keepalive: true,
-              headers: {
-                'Accept': '*/*',
-                'Cache-Control': 'no-cache'
-              },
-              ...options.fetchOptions
-            });
-            
-            if (response.ok) {
-              finalUrl = altUrl;
-              console.log(`[Offscreen] ✅ Alternative URL ${i + 1} succeeded for ${file.name}`);
-              break;
-            }
-          } catch (altError) {
-            console.warn(`[Offscreen] ⚠️ Alternative URL ${i + 1} failed for ${file.name}:`, altError.message);
-            continue;
-          }
-        }
-      }
-    } catch (fetchError) {
-      // If primary fetch failed, try alternatives for HTML files
-      if (file.isHtmlFile && file.alternativeUrls && file.alternativeUrls.length > 0) {
-        console.log(`[Offscreen] 🔄 Primary fetch failed, trying alternative URLs for ${file.name}`);
-        
-        for (let i = 0; i < file.alternativeUrls.length; i++) {
-          const altUrl = file.alternativeUrls[i];
-          try {
-            console.log(`[Offscreen] 🔄 Trying alternative URL ${i + 1}/${file.alternativeUrls.length}: ${altUrl.substring(0, 100)}...`);
-            
-            response = await enhancedFetch(altUrl, {
-              signal: controller.signal,
-              keepalive: true,
-              headers: {
-                'Accept': '*/*',
-                'Cache-Control': 'no-cache'
-              },
-              ...options.fetchOptions
-            });
-            
-            if (response.ok) {
-              finalUrl = altUrl;
-              console.log(`[Offscreen] ✅ Alternative URL ${i + 1} succeeded for ${file.name}`);
-              break;
-            }
-          } catch (altError) {
-            console.warn(`[Offscreen] ⚠️ Alternative URL ${i + 1} failed for ${file.name}:`, altError.message);
-            continue;
-          }
-        }
-      }
-      
-      if (!response) {
-        throw fetchError;
-      }
-    }
-    
-    // Clear timeout on successful response
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText} (Final URL: ${finalUrl.substring(0, 100)}...)`);
-    }    // Get the blob and measure final performance
-    const blob = await response.blob();
-    const downloadTime = performance.now() - startTime;
-    
-    // Extract MIME type from response headers
-    const mimeType = response.headers.get('content-type')?.split(';')[0] || blob.type || null;
-    
-    // Validate blob size - don't return empty files as successful
-    if (!blob || blob.size === 0) {
-      throw new Error(`Downloaded file is empty (0 bytes) for ${file.name}`);
-    }
-    
-    // Enhanced logging for download completion
-    enhancedLogger.logFileDownloadComplete(file, blob, downloadTime, actualTimeout);
-    
-    // Record performance metrics
-    performanceTracker.recordDownload(downloadTime, blob.size);
-    
-    return {
-      blob,
-      downloadTime,
-      actualSize: blob.size,
-      estimatedSize: file.estimatedSize,
-      sizeAccuracy: (blob.size / file.estimatedSize) * 100,
-      timeoutUsed: actualTimeout,
-      timeoutUtilization: (downloadTime / actualTimeout) * 100,
-      success: true,
-      finalUrl: finalUrl,
-      mimeType: mimeType
-    };
-    
-  } catch (error) {
-    // Clear timeout if still active
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    
-    const downloadTime = performance.now() - startTime;
-    
-    // Log the error with context
-    console.error(`[Offscreen] ❌ downloadFileWithTimeout failed for ${file.name}:`, error);
-    console.error(`[Offscreen] 📋 Error context:`, {
-      fileName: file.name,
-      url: file.url.substring(0, 100) + '...',
-      estimatedSize: `${(file.estimatedSize / 1024 / 1024).toFixed(2)}MB`,
-      isHtml: file.isHtmlFile,
-      duration: `${(downloadTime / 1000).toFixed(1)}s`,
-      timeout: `${((options.timeout || performanceTracker.getOptimalTimeout(file.isHtmlFile, file.estimatedSize)) / 1000 / 60).toFixed(1)}min`,
-      errorType: error.name,
-      errorMessage: error.message
-    });
-      return {
-      blob: null,
-      downloadTime,
-      actualSize: 0,
-      estimatedSize: file.estimatedSize,
-      sizeAccuracy: 0,
-      timeoutUsed: options.timeout || performanceTracker.getOptimalTimeout(file.isHtmlFile, file.estimatedSize),
-      timeoutUtilization: 0,
-      success: false,
-      error: error.message,
-      mimeType: null
-    };
-  }
-}
-
-// Performance tracking and adaptive optimization
-const performanceTracker = {
-  downloadTimes: [],
-  connectionQuality: 1.0,
-  avgFileSize: 500000,
-  networkType: 'unknown',
-    recordDownload(duration, size) {
-    this.downloadTimes.push(duration);
-    if (this.downloadTimes.length > 10) {
-      this.downloadTimes.shift(); // Keep only last 10 measurements
-    }
-    
-    const avgTime = this.downloadTimes.reduce((a, b) => a + b, 0) / this.downloadTimes.length;
-    const sizePerMs = size / duration;
-    const speedMBps = (size / 1024 / 1024) / (duration / 1000);
-    const previousQuality = this.connectionQuality;
-    
-    // Enhanced logging for performance tracking
-    console.log(`[Offscreen] 📊 Performance recorded:`, {
-      duration: `${(duration / 1000).toFixed(1)}s (${duration}ms)`,
-      size: `${(size / 1024 / 1024).toFixed(2)}MB (${size} bytes)`,
-      speed: `${speedMBps.toFixed(2)}MB/s`,
-      bytesPerMs: `${sizePerMs.toFixed(2)} bytes/ms`,
-      avgTime: `${(avgTime / 1000).toFixed(1)}s`,
-      totalRecords: this.downloadTimes.length,
-      connectionQuality: this.connectionQuality.toFixed(2),
-      networkType: this.networkType
-    });
-    
-    // Update connection quality based on performance
-    if (avgTime > 2500 || sizePerMs < 100) {
-      this.connectionQuality = Math.max(0.3, this.connectionQuality - 0.1);
-      console.log(`[Offscreen] 📉 Connection quality decreased from ${previousQuality.toFixed(2)} to ${this.connectionQuality.toFixed(2)} (slow performance detected)`);
-    } else if (avgTime < 1000 && sizePerMs > 500) {
-      this.connectionQuality = Math.min(1.0, this.connectionQuality + 0.1);
-      console.log(`[Offscreen] 📈 Connection quality improved from ${previousQuality.toFixed(2)} to ${this.connectionQuality.toFixed(2)} (fast performance detected)`);
-    }
-    
-    // Detect network type for better optimization
-    if ('connection' in navigator && navigator.connection) {
-      const oldNetworkType = this.networkType;
-      this.networkType = navigator.connection.effectiveType || 'unknown';
-      if (oldNetworkType !== this.networkType) {
-        console.log(`[Offscreen] 🌐 Network type changed from ${oldNetworkType} to ${this.networkType}`);
-      }
-    }
-
-    // Performance trend analysis
-    if (this.downloadTimes.length >= 3) {
-      const recentTimes = this.downloadTimes.slice(-3);
-      const recentAvg = recentTimes.reduce((a, b) => a + b, 0) / recentTimes.length;
-      const overallAvg = avgTime;
-      
-      if (recentAvg > overallAvg * 1.5) {
-        console.warn(`[Offscreen] 📊 Performance trend: Downloads getting slower (recent: ${(recentAvg/1000).toFixed(1)}s vs avg: ${(overallAvg/1000).toFixed(1)}s)`);
-      } else if (recentAvg < overallAvg * 0.7) {
-        console.log(`[Offscreen] 📊 Performance trend: Downloads getting faster (recent: ${(recentAvg/1000).toFixed(1)}s vs avg: ${(overallAvg/1000).toFixed(1)}s)`);
-      }
-    }
-
-    // Speed categorization
-    if (speedMBps > 10) {
-      console.log(`[Offscreen] 🚀 Excellent speed: ${speedMBps.toFixed(2)}MB/s - very fast connection`);
-    } else if (speedMBps > 5) {
-      console.log(`[Offscreen] ⚡ Good speed: ${speedMBps.toFixed(2)}MB/s - fast connection`);
-    } else if (speedMBps > 1) {
-      console.log(`[Offscreen] ✅ Moderate speed: ${speedMBps.toFixed(2)}MB/s - acceptable connection`);
-    } else if (speedMBps > 0.5) {
-      console.log(`[Offscreen] ⚠️ Slow speed: ${speedMBps.toFixed(2)}MB/s - slow connection`);
-    } else {
-      console.warn(`[Offscreen] 🐌 Very slow speed: ${speedMBps.toFixed(2)}MB/s - very slow connection`);
-    }
-  },
-  
-  getOptimalBatchSize() {
-    let baseSize = 3;
-    
-    // Adjust based on connection quality
-    if (this.connectionQuality > 0.8) {
-      baseSize = 6; // High quality connection
-    } else if (this.connectionQuality < 0.5) {
-      baseSize = 2; // Poor connection
-    }
-    
-    // Further adjust based on network type
-    if (this.networkType === '4g' || this.networkType === '5g') {
-      baseSize = Math.min(8, baseSize + 2);
-    } else if (this.networkType === '3g' || this.networkType === 'slow-2g') {
-      baseSize = Math.max(1, baseSize - 1);
-    }
-    
-    return baseSize;
-  },  getOptimalTimeout(isHtml = false, fileSize = null) {
-    // Ultra-generous timeouts for very large files (up to 287MB PowerPoint files)
-    let baseTimeout;
-    let timeoutReason = '';
-    
-    // Determine base timeout based on file size if available
-    if (fileSize && fileSize > 0) {
-      // For ultra-massive files (>200MB), use maximum timeouts
-      if (fileSize > 200000000) { // > 200MB (like 287MB PowerPoint files)
-        baseTimeout = 2700000; // 45 minutes for ultra-massive files
-        timeoutReason = 'ultra-massive file (>200MB)';
-      }
-      // For very large files (>50MB), use much longer timeouts
-      else if (fileSize > 50000000) { // > 50MB
-        baseTimeout = 1800000; // 30 minutes for huge files
-        timeoutReason = 'huge file (>50MB)';
-      } else if (fileSize > 10000000) { // > 10MB
-        baseTimeout = 900000;  // 15 minutes for large files
-        timeoutReason = 'large file (>10MB)';
-      } else if (fileSize > 1000000) { // > 1MB
-        baseTimeout = 300000;  // 5 minutes for medium files
-        timeoutReason = 'medium file (>1MB)';
-      } else {
-        baseTimeout = isHtml ? 120000 : 180000; // 2-3 minutes for small files
-        timeoutReason = `small file (<1MB, ${isHtml ? 'HTML' : 'binary'})`;
-      }
-    } else {
-      // Fallback when file size is unknown - assume large files
-      baseTimeout = isHtml ? 600000 : 1200000; // 10-20 minutes default
-      timeoutReason = `unknown size (${isHtml ? 'HTML' : 'binary'} default)`;
-    }
-    
-    // Scale based on connection quality but with much higher minimums
-    const qualityMultiplier = 1 + (1 - this.connectionQuality) * 2;
-    const finalTimeout = baseTimeout * qualityMultiplier;
-    
-    // Absolute maximum: 60 minutes for ultra-large files
-    const result = Math.min(finalTimeout, 3600000);
-    
-    // Enhanced logging for timeout calculation
-    enhancedLogger.logTimeoutCalculation(isHtml, fileSize, result);
-    console.log(`[Offscreen] ⏱️ Timeout details:`, {
-      reason: timeoutReason,
-      baseTimeout: `${(baseTimeout / 1000 / 60).toFixed(1)}min`,
-      qualityMultiplier: qualityMultiplier.toFixed(2),
-      finalTimeout: `${(result / 1000 / 60).toFixed(1)}min`,
-      connectionQuality: this.connectionQuality.toFixed(2)
-    });
-    
-    return result;
-  }
-};

@@ -84,6 +84,35 @@ runtimeAPI.onMessage.addListener((request, sender, sendResponse) => {
         return false;
     }
 
+    if (request.action === 'downloadZipFromUrl') {
+        console.log(`[BackgroundScript] Received request to download ZIP from URL for downloadId: ${request.downloadId}`);
+        
+        downloadsAPI.download({
+            url: request.url,
+            filename: request.filename,
+            saveAs: true // Prompt user for save location
+        }, (downloadItem) => {
+            // The downloadId from the callback is the browser's download ID, not our internal one.
+            if (downloadsAPI.lastError) {
+                console.error(`[BackgroundScript] Download failed: ${downloadsAPI.lastError.message}`);
+                const finalTotal = activeDownloads.get(request.downloadId)?.total || 1;
+                sendProgressUpdate(request.downloadId, finalTotal, finalTotal, `Download failed: ${downloadsAPI.lastError.message}`);
+            } else {
+                console.log(`[BackgroundScript] Download started successfully. Filename: ${request.filename}`);
+                 const finalTotal = activeDownloads.get(request.downloadId)?.total || 1;
+                sendProgressUpdate(request.downloadId, finalTotal, finalTotal, 'Download completed!');
+            }
+            
+            // It's crucial to revoke the Object URL to free up memory.
+            setTimeout(() => {
+                console.log(`[BackgroundScript] Revoking object URL: ${request.url}`);
+                URL.revokeObjectURL(request.url);
+            }, 1000);
+        });
+        
+        return false; // No async response needed
+    }
+
     if (request.action === "downloadZip") {
         const downloadId = generateDownloadId();
         console.log("Received downloadZip request for URL:", request.startUrl, "with ID:", downloadId);
@@ -96,7 +125,6 @@ runtimeAPI.onMessage.addListener((request, sender, sendResponse) => {
             current: 0,
             total: 0,
             phase: 'indexing',
-            startTime: Date.now(),
             completed: false
         };
         
@@ -236,7 +264,6 @@ function sendProgressUpdate(downloadId, current, total, status) {
         download.current = current;
         download.total = total;
         download.status = status;
-        download.lastUpdate = Date.now();
         
         // Optimized phase detection
         if (status.includes('Downloading:')) {
