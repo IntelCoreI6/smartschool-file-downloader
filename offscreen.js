@@ -348,6 +348,15 @@ function getExtensionFromMimeText(mimeText) {
     return null;
 }
 
+function getExtensionFromStyle(style) {
+    if (!style) return null;
+    const match = style.match(/mime_img_([a-z0-9]+)/);
+    if (match && match[1]) {
+        return match[1]; // e.g., 'png'
+    }
+    return null;
+}
+
 // Function to process each child element in the container
 function processRow(row, baseUrl) {
   try {
@@ -403,6 +412,45 @@ function processRow(row, baseUrl) {
         textContent: fileName,
         absoluteUrl: absoluteUrl
       };
+    }
+
+    // Check for image files (like the fancybox example)
+    const imageLink = row.querySelector('a.smsc-download__link, a[rel="attachLightbox"]');
+    const styleInfoDiv = row.querySelector('.smsc_cm_body_row_block[style*="mime_img"]');
+
+    if (imageLink && styleInfoDiv) {
+        const href = imageLink.getAttribute('href');
+        if (href && href !== '#') {
+            const absoluteUrl = new URL(href, new URL(baseUrl).origin).href;
+            let fileName = imageLink.getAttribute('title') || imageLink.textContent.trim();
+
+            if (!fileName) {
+                fileName = 'downloaded_image';
+            }
+
+            // Try to get extension from style first (more specific)
+            const styleAttr = styleInfoDiv.getAttribute('style');
+            let extension = getExtensionFromStyle(styleAttr);
+
+            // If not found in style, fallback to mime text
+            if (!extension && mimeInfoEl) {
+                const mimeText = mimeInfoEl.textContent;
+                extension = getExtensionFromMimeText(mimeText);
+            }
+            
+            // If we found an extension, append it
+            if (extension && !hasFileExtension(fileName)) {
+                fileName += '.' + extension;
+            }
+
+            console.log(`[Offscreen] Found image file: ${fileName} -> ${absoluteUrl}`);
+            return {
+                type: 'file',
+                href: href,
+                textContent: fileName,
+                absoluteUrl: absoluteUrl
+            };
+        }
     }
 
     // Fallback for HTML files opened via onclick
