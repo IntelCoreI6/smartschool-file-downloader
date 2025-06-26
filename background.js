@@ -100,7 +100,7 @@ runtimeAPI.onMessage.addListener((request, sender, sendResponse) => {
             } else {
                 console.log(`[BackgroundScript] Download started successfully. Filename: ${request.filename}`);
                  const finalTotal = activeDownloads.get(request.downloadId)?.total || 1;
-                sendProgressUpdate(request.downloadId, finalTotal, finalTotal, 'Download completed!');
+                sendProgressUpdate(request.downloadId, finalTotal, finalTotal, 'ZIP ready. Download starting...');
             }
             
             // It's crucial to revoke the Object URL to free up memory.
@@ -362,6 +362,16 @@ async function processDownloads(startUrl, downloadId) {
             continue;
         }
         visitedFolderUrls.add(currentFolder.url);
+
+        // New: Send progress update for the indexing phase
+        const totalFolders = visitedFolderUrls.size + foldersToScan.length;
+        sendProgressUpdate(
+            downloadId, 
+            visitedFolderUrls.size, 
+            totalFolders, 
+            `Indexing... (${visitedFolderUrls.size}/${totalFolders} folders)`
+        );
+
         console.log(`Scanning folder: ${currentFolder.url} (Zip path prefix: ${currentFolder.pathPrefix})`);
 
         let htmlText;

@@ -243,43 +243,42 @@ body {
     100% { left: 100%; }
 }
 
-/* Phase-specific colors */
-.phase-indexing .progress-bar-fill {
-    background: linear-gradient(90deg, #FF9800 0%, #FFC107 50%, #FFEB3B 100%);
+.progress-bar-bg.infinite .progress-bar-fill {
+    background: linear-gradient(90deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.8) 50%, rgba(255,255,255,0.5) 100%);
+    animation: infinite-progress 2s ease-in-out infinite;
 }
 
-.phase-downloading .progress-bar-fill {
-    background: linear-gradient(90deg, #2196F3 0%, #03DAC6 50%, #4CAF50 100%);
+@keyframes infinite-progress {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
 }
 
-.phase-zipping .progress-bar-fill {
-    background: linear-gradient(90deg, #9C27B0 0%, #E91E63 50%, #FF5722 100%);
+/* Phase-specific styling */
+.download-item.phase-indexing .progress-bar-fill {
+    background-color: #3498db; /* Blue */
 }
 
-.phase-completed .progress-bar-fill {
-    background: linear-gradient(90deg, #4CAF50 0%, #8BC34A 100%);
+.download-item.phase-downloading .progress-bar-fill {
+    background-color: #9b59b6; /* Purple */
 }
 
-/* Progress Text */
-.progress-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    color: #5a6c7d;
-    margin-top: 4px;
+.download-item.phase-zipping .progress-bar-fill {
+    background-color: #e67e22; /* Orange */
 }
 
-.progress-text {
-    font-weight: 500;
+.download-item.completed .progress-bar-fill {
+    background-color: #2ecc71; /* Green */
 }
 
-.progress-percentage {
-    font-weight: 600;
-    color: #2c3e50;
+.download-item.phase-error .progress-bar-fill {
+    background-color: #e74c3c; /* Red */
 }
 
-/* Download Meta */
+
 .download-meta {
     display: flex;
     justify-content: space-between;

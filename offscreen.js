@@ -327,12 +327,34 @@ function getFileExtensionFromUrl(url) {
 }
 
 const FILE_TYPE_MAP = new Map([
+  // Documents
   ['pdf-bestand', 'pdf'],
   ['word-document', 'docx'],
-  ['archief', 'zip'],
+  ['word-document (97-2003)', 'doc'],
   ['powerpoint-presentatie', 'pptx'],
+  ['powerpoint-presentatie (97-2003)', 'ppt'],
   ['excel-werkmap', 'xlsx'],
-  ['afbeelding', 'jpg'],
+  ['excel-werkmap (97-2003)', 'xls'],
+  ['excel-bestand', 'xls'],
+  ['tekstbestand', 'txt'],
+  ['opendocument-tekst', 'odt'],
+  ['opendocument-spreadsheet', 'ods'],
+  ['opendocument-presentatie', 'odp'],
+
+  // Archives
+  ['archief', 'zip'], // Keep as a fallback
+  ['zip-archief', 'zip'],
+  ['rar-archief', 'rar'],
+
+  // Images
+  ['afbeelding', 'jpg'], // Keep as a fallback
+  ['png-afbeelding', 'png'],
+  ['jpeg-afbeelding', 'jpg'],
+  ['gif-afbeelding', 'gif'],
+  ['svg-afbeelding', 'svg'],
+  ['bitmap-afbeelding', 'bmp'],
+
+  // Media
   ['video', 'mp4'],
   ['geluid', 'mp3']
 ]);
@@ -350,10 +372,22 @@ function getExtensionFromMimeText(mimeText) {
 
 function getExtensionFromStyle(style) {
     if (!style) return null;
-    const match = style.match(/mime_img_([a-z0-9]+)/);
+
+    // Matches patterns like: mime_img_png, mime_zip_zip, mime_video_m4v
+    const match = style.match(/mime_[a-z0-9]+_([a-z0-9]+)/);
+    
     if (match && match[1]) {
-        return match[1]; // e.g., 'png'
+        const subtype = match[1].toLowerCase(); // e.g., 'png', 'zip', 'm4v'
+
+        // Map known subtypes to common extensions
+        const subtypeMap = new Map([
+            ['m4v', 'mp4'],
+            ['jpeg', 'jpg']
+        ]);
+
+        return subtypeMap.get(subtype) || subtype;
     }
+    
     return null;
 }
 
@@ -414,36 +448,42 @@ function processRow(row, baseUrl) {
       };
     }
 
-    // Check for image files (like the fancybox example)
-    const imageLink = row.querySelector('a.smsc-download__link, a[rel="attachLightbox"]');
-    const styleInfoDiv = row.querySelector('.smsc_cm_body_row_block[style*="mime_img"]');
+    // Check for generic file links (images, zip files, videos, etc.) that are not handled above
+    const genericFileLink = row.querySelector('a.smsc-download__link, a[rel="attachLightbox"]');
+    const styleInfoDiv = row.querySelector('.smsc_cm_body_row_block[style*="mime_"]');
 
-    if (imageLink && styleInfoDiv) {
-        const href = imageLink.getAttribute('href');
+    // Ensure it's not a folder and hasn't been handled by the js-download-link logic
+    if (genericFileLink && styleInfoDiv && !styleInfoDiv.getAttribute('style').includes('mime_folder')) {
+        const href = genericFileLink.getAttribute('href');
         if (href && href !== '#') {
             const absoluteUrl = new URL(href, new URL(baseUrl).origin).href;
-            let fileName = imageLink.getAttribute('title') || imageLink.textContent.trim();
+            let fileName = genericFileLink.getAttribute('title') || genericFileLink.textContent.trim();
 
             if (!fileName) {
-                fileName = 'downloaded_image';
+                fileName = 'downloaded_file';
             }
 
-            // Try to get extension from style first (more specific)
-            const styleAttr = styleInfoDiv.getAttribute('style');
-            let extension = getExtensionFromStyle(styleAttr);
+            // Try to get extension if the filename doesn't already have one
+            if (!hasFileExtension(fileName)) {
+                let extension = null;
+                
+                // Try to get extension from style first (more specific)
+                const styleAttr = styleInfoDiv.getAttribute('style');
+                extension = getExtensionFromStyle(styleAttr);
 
-            // If not found in style, fallback to mime text
-            if (!extension && mimeInfoEl) {
-                const mimeText = mimeInfoEl.textContent;
-                extension = getExtensionFromMimeText(mimeText);
-            }
-            
-            // If we found an extension, append it
-            if (extension && !hasFileExtension(fileName)) {
-                fileName += '.' + extension;
+                // If not found in style, fallback to mime text
+                if (!extension && mimeInfoEl) {
+                    const mimeText = mimeInfoEl.textContent;
+                    extension = getExtensionFromMimeText(mimeText);
+                }
+                
+                // If we found an extension, append it
+                if (extension) {
+                    fileName += '.' + extension;
+                }
             }
 
-            console.log(`[Offscreen] Found image file: ${fileName} -> ${absoluteUrl}`);
+            console.log(`[Offscreen] Found generic file: ${fileName} -> ${absoluteUrl}`);
             return {
                 type: 'file',
                 href: href,
